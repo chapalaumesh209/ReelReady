@@ -1,0 +1,14 @@
+ReelReady uses unmodified upstream FFmpeg.wasm binaries.
+
+Wrapper: @ffmpeg/ffmpeg 0.12.15 (MIT)
+Source: https://github.com/ffmpegwasm/ffmpeg.wasm/tree/main/packages/ffmpeg
+
+Core: @ffmpeg/core 0.12.10 (GPL-2.0-or-later)
+The distributed ffmpeg-core.js and concatenation of core-0.bin + core-1.bin
+are the unmodified upstream single-threaded core, split solely for hosting.
+Core build sources and instructions:
+https://github.com/ffmpegwasm/ffmpeg.wasm/tree/v0.12.10
+https://github.com/ffmpegwasm/ffmpeg.wasm/tree/main/build
+Upstream FFmpeg source and licensing: https://ffmpeg.org/legal.html
+
+License texts are provided alongside this notice.

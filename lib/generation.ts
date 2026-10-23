@@ -18,6 +18,7 @@ export async function generateStructuredContent(options: {
   content: unknown;
   schema: Record<string, unknown>;
   signal: AbortSignal;
+  mediaParts?: Array<{ fileData: { fileUri: string; mimeType: string } }>;
 }): Promise<unknown> {
   const { key, model } = generationConfiguration();
   if (!key)
@@ -39,7 +40,13 @@ export async function generateStructuredContent(options: {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: options.instructions }] },
         contents: [
-          { role: "user", parts: [{ text: JSON.stringify(options.content) }] },
+          {
+            role: "user",
+            parts: [
+              ...(options.mediaParts || []),
+              { text: JSON.stringify(options.content) },
+            ],
+          },
         ],
         generationConfig: {
           temperature: 0.6,

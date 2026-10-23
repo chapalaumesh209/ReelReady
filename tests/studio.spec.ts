@@ -1,235 +1,256 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { exampleKit } from "../lib/content";
-import type { Page } from "@playwright/test";
-async function mockExamples(page: Page) {
-  await page.route("**/api/generate", async (route) => {
-    if (route.request().method() === "GET") {
-      await route.fulfill({ json: { configured: false } });
-      return;
-    }
-    const data = route.request().postDataJSON();
-    await route.fulfill({
-      json: exampleKit(data.mode, data.language, data.script),
-    });
-  });
-}
-
-test("open studio: examples, validation, editable outputs, persistence, copy, and mode isolation", async ({
-  page,
-  context,
-}) => {
-  await mockExamples(page);
-  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.setViewportSize({ width: 1440, height: 1100 });
-  await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-  await page.evaluate(() => document.fonts.ready);
-  await expect(page.locator("#composer")).toHaveAttribute("data-ready", "true");
-  await expect(
-    page.getByRole("button", { name: /sign in|log in|sign up/i }),
-  ).toHaveCount(0);
-  await page.screenshot({
-    path: "artifacts/desktop-initial.png",
-    fullPage: true,
-  });
-  await page.getByRole("button", { name: "Create my posts" }).click();
-  await expect(page.getByRole("alert")).toContainText("Tell us a little more");
-  await expect(page.locator("#video-input")).toBeFocused();
-  await page.getByRole("button", { name: "Try an example" }).click();
-  await page.getByRole("button", { name: "Create my posts" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Your publishing kit" }),
-  ).toBeVisible();
-  await expect(page.locator(".output-sheet")).toHaveCount(4);
-  await expect(page.locator(".sample-notice")).toBeVisible();
-  await page.locator("#output-instagram").fill("My own edited caption. #Mango");
-  await expect(page.locator(".output-sheet").first()).toContainText(
-    "1 hashtag",
-  );
-  await page
-    .getByRole("button", { name: "Copy Instagram caption", exact: true })
-    .click();
-  await expect
-    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-    .toBe("My own edited caption. #Mango");
-  await page.reload();
-  await expect(page.locator("#output-instagram")).toHaveValue(
-    "My own edited caption. #Mango",
-  );
-  await page
-    .getByRole("button", { name: "Before recording", exact: true })
-    .click();
-  await expect(page.locator("#video-input")).toHaveValue("");
-  await page.getByRole("button", { name: "Try an example" }).click();
-  await page.getByRole("button", { name: "Create my plan" }).click();
-  await expect(page.locator(".output-sheet")).toHaveCount(3);
-  await page
-    .getByRole("button", { name: "After recording", exact: true })
-    .click();
-  await expect(page.locator("#output-instagram")).toHaveValue(
-    "My own edited caption. #Mango",
-  );
-  await page.locator("#output-x").fill("word ".repeat(80));
-  await expect(page.locator(".output-sheet").last()).toContainText(
-    "Over limit",
-  );
-  await page.getByLabel("Output language").selectOption("Telugu");
-  await page.getByLabel("Writing script").selectOption("roman");
-  await page.getByRole("button", { name: "Create my posts" }).click();
-  await expect(page.locator("#output-instagram")).toHaveValue(/perugu/);
-  await expect(page.locator("#output-instagram")).not.toHaveValue(
-    /[\u0C00-\u0C7F]/,
-  );
-  await page.getByLabel("Writing script").selectOption("native");
-  await page.getByRole("button", { name: "Create my posts" }).click();
-  await expect(page.locator("#output-instagram")).toHaveValue(
-    /[\u0C00-\u0C7F]/,
-  );
-  await page.screenshot({
-    path: "artifacts/desktop-results.png",
-    fullPage: true,
-  });
-  const a11y = await new AxeBuilder({ page })
-    .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
-    .analyze();
-  expect(a11y.violations).toEqual([]);
-  await page
-    .getByRole("button", { name: "Clear saved data", exact: true })
-    .click();
-  await page.getByRole("button", { name: "Keep my work" }).click();
-  await expect(page.locator("#output-instagram")).toBeVisible();
-  await page
-    .getByRole("button", { name: "Clear saved data", exact: true })
-    .click();
-  await page
-    .locator(".clear-confirm")
-    .getByRole("button", { name: "Clear saved data", exact: true })
-    .click();
-  await expect(page.locator("#video-input")).toHaveValue("");
-  await expect(page.locator(".output-sheet")).toHaveCount(0);
-});
-
-test("mobile, native selects, optional details, help, keyboard, and reduced motion", async ({
-  page,
-}) => {
-  await mockExamples(page);
-  await page.addInitScript(() =>
-    Object.defineProperty(navigator, "userAgent", {
-      value:
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
+const plan = {
+  ideas: [0, 1, 2].map((i) => ({
+    title: ["A mango morning", "Breakfast in three steps", "The fruit swap"][i],
+    hook: "A mango yogurt bowl for your next breakfast.",
+    outline: [
+      "Show the ingredients",
+      "Mix yogurt and mango",
+      "Add granola and serve",
+    ],
+    shots: ["Ingredients close-up", "Mixing the bowl", "Finished breakfast"],
+    durationSeconds: 30,
+    preparationMinutes: 15,
+  })),
+  schedulingNote:
+    "Your chosen time leaves room to record and review. This is a user-selected time, not an analytics prediction.",
+  recordBy: new Date(Date.now() + 3600000).toISOString(),
+};
+const analysis = {
+  summary: "A creator shows a mango yogurt bowl and adds granola.",
+  sourceLanguage: "Telugu",
+  transcript: "Mamidi perugu bowl.",
+  englishScript: "Here is my mango yogurt bowl. Add mango and granola.",
+  audioNote: "An English translation for the short reel.",
+};
+async function setup(page: Page) {
+  await page.route("**/api/connections", (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        aiConfigured: true,
+        accounts: {
+          instagram: { name: "@foodcreator", connected: true, reauth: false },
+          youtube: { name: "Food channel", connected: true, reauth: false },
+          x: { name: "@foodcreator", connected: true, reauth: false },
+        },
+      },
     }),
   );
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.route("**/api/plan", (route) => route.fulfill({ json: plan }));
+  await page.route("**/api/review", (route) =>
+    route.fulfill({ json: analysis }),
+  );
+  await page.route("**/api/video*", (route) =>
+    route.fulfill({ json: { token: "test-file-token", state: "ACTIVE" } }),
+  );
+  await page.route("**/api/generate", (route) => {
+    const d = route.request().postDataJSON();
+    return route.fulfill({ json: exampleKit("after", d.language, d.script) });
+  });
   await page.goto("/");
-  await page.evaluate(() => document.fonts.ready);
-  await expect(page.locator("#composer")).toHaveAttribute("data-ready", "true");
-  await page.screenshot({
-    path: "artifacts/mobile-initial.png",
-    fullPage: true,
+  await expect(
+    page.getByRole("button", { name: "Generate reel ideas", exact: true }),
+  ).toBeEnabled();
+}
+async function fixture(page: Page) {
+  return await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 360;
+    canvas.height = 640;
+    const ctx = canvas.getContext("2d")!,
+      stream = canvas.captureStream(12),
+      chunks: BlobPart[] = [];
+    const rec = new MediaRecorder(stream, { mimeType: "video/webm" });
+    rec.ondataavailable = (e) => chunks.push(e.data);
+    const done = new Promise<Blob>(
+      (resolve) =>
+        (rec.onstop = () => resolve(new Blob(chunks, { type: "video/webm" }))),
+    );
+    rec.start();
+    const start = performance.now();
+    while (performance.now() - start < 1500) {
+      ctx.fillStyle = "#e8dcff";
+      ctx.fillRect(0, 0, 360, 640);
+      ctx.fillStyle = "#6843aa";
+      ctx.font = "28px sans-serif";
+      ctx.fillText("Mango morning", 45, 310);
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    rec.stop();
+    stream.getTracks().forEach((t) => t.stop());
+    return Array.from(new Uint8Array(await (await done).arrayBuffer()));
   });
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
-  ).toBeTruthy();
-  await page.getByRole("button", { name: "Made for Wispr Flow" }).click();
-  await expect(page.locator("#flow-guide")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.locator("#flow-guide")).toHaveCount(0);
-  await page.getByRole("button", { name: "Add my details" }).click();
+}
+async function toRecording(page: Page) {
   await page
-    .getByLabel("Make it sound like you")
-    .fill("Keep it friendly and short.");
-  await page.getByLabel("Brand or creator name").fill("My kitchen");
-  await page.reload();
-  await page.getByRole("button", { name: "Add my details" }).click();
-  await expect(page.getByLabel("Brand or creator name")).toHaveValue(
-    "My kitchen",
-  );
-  await page.getByLabel("Make it sound like you").fill("");
-  await page.getByLabel("Brand or creator name").fill("");
-  await page.getByLabel("Output language").focus();
-  await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("Enter");
-  await page.getByLabel("Output language").selectOption("Hindi");
-  await page.getByRole("button", { name: "Try an example" }).click();
-  await page.locator("#video-input").press("Enter");
-  await expect(page.locator("#output-instagram")).toHaveValue(
-    /[\u0900-\u097F]/,
-  );
-  await page.screenshot({
-    path: "artifacts/mobile-results.png",
-    fullPage: true,
+    .getByRole("button", { name: "Try an example", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Generate reel ideas", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Pick your starting point" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Use this plan & record" }).click();
+}
+async function uploadRecording(page: Page) {
+  const bytes = await fixture(page);
+  await page.getByLabel("Choose recording").setInputFiles({
+    name: "breakfast.webm",
+    mimeType: "video/webm",
+    buffer: Buffer.from(bytes),
   });
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
-  ).toBeTruthy();
-  const a11y = await new AxeBuilder({ page })
-    .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
-    .analyze();
-  expect(a11y.violations).toEqual([]);
-});
-
-test("failure and slow response preserve input; cancel prevents stale output", async ({
+  await expect(page.getByText("Recording added.")).toBeVisible();
+}
+test("desktop: connected flow, local video, review, real WASM export, captions and schedule receipt", async ({
   page,
 }) => {
-  await page.goto("/");
-  await expect(page.locator("#composer")).toHaveAttribute("data-ready", "true");
+  test.setTimeout(180000);
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  await setup(page);
+  await page.screenshot({ path: "artifacts/flow-desktop.png", fullPage: true });
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await toRecording(page);
+  await uploadRecording(page);
+  await page.getByRole("button", { name: "Review my recording" }).click();
+  await expect(page.getByLabel("English voiceover script")).toHaveValue(
+    analysis.englishScript,
+  );
+  await page.route("**/api/voiceover", async (route) => {
+    const count = 24000,
+      buf = Buffer.alloc(44 + count * 2);
+    buf.write("RIFF");
+    buf.writeUInt32LE(36 + count * 2, 4);
+    buf.write("WAVEfmt ", 8);
+    buf.writeUInt32LE(16, 16);
+    buf.writeUInt16LE(1, 20);
+    buf.writeUInt16LE(1, 22);
+    buf.writeUInt32LE(24000, 24);
+    buf.writeUInt32LE(48000, 28);
+    buf.writeUInt16LE(2, 32);
+    buf.writeUInt16LE(16, 34);
+    buf.write("data", 36);
+    buf.writeUInt32LE(count * 2, 40);
+    for (let i = 0; i < count; i++)
+      buf.writeInt16LE(
+        Math.round(Math.sin((i / 24000) * 440 * Math.PI * 2) * 1000),
+        44 + i * 2,
+      );
+    await route.fulfill({ contentType: "audio/wav", body: buf });
+  });
   await page
-    .locator("#video-input")
-    .fill("I filmed a real video about growing basil on a sunny balcony.");
-  await page.route("**/api/generate", async (route) => {
-    if (route.request().method() === "POST")
-      await route.fulfill({
-        status: 503,
-        contentType: "application/json",
-        body: JSON.stringify({
-          error: "The writing service is busy. Try again shortly.",
-        }),
-      });
-    else await route.continue();
+    .getByRole("button", { name: "Create English video", exact: true })
+    .click();
+  await expect(page.getByText("English video ready.")).toBeVisible({
+    timeout: 100000,
   });
-  await page.getByRole("button", { name: "Create my posts" }).click();
-  await expect(page.getByRole("alert")).toContainText("Try again");
-  await expect(page.locator("#video-input")).toHaveValue(/basil/);
-  await page.unroute("**/api/generate");
-  let pending: (() => void) | undefined;
-  await page.route("**/api/generate", async (route) => {
-    if (route.request().method() === "POST") {
-      await new Promise<void>((resolve) => {
-        pending = resolve;
-      });
-      try {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            mode: "after",
-            language: "English",
-            script: "native",
-            outputs: [
-              {
-                id: "instagram",
-                title: "Instagram caption",
-                text: "stale output",
-              },
-            ],
-          }),
-        });
-      } catch {}
-    } else await route.continue();
-  });
-  await page.getByRole("button", { name: "Create my posts" }).click();
   await expect(
-    page.getByRole("button", { name: /Creating your posts/ }),
+    page.getByRole("link", { name: "Download English video" }),
+  ).toBeVisible();
+  await expect
+    .poll(
+      () =>
+        page
+          .locator('video[aria-label="Selected video preview"]')
+          .evaluate(
+            (v: HTMLVideoElement) =>
+              v.readyState >= 2 && v.duration > 0 && v.videoWidth === 360,
+          ),
+      { timeout: 15000 },
+    )
+    .toBe(true);
+  await page
+    .getByRole("textbox", { name: "Instagram caption", exact: true })
+    .fill("Mango, yogurt, granola. Breakfast made simple. #Mango");
+  await page.screenshot({
+    path: "artifacts/flow-review-desktop.png",
+    fullPage: true,
+  });
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page
+    .getByRole("button", { name: "Review & publish", exact: true })
+    .click();
+  let publishUploads = 0;
+  await page.route("**/api/publish", (route) => {
+    if (route.request().headers()["content-type"]?.includes("application/json"))
+      return route.fulfill({
+        json: { token: "signed-publish", tracking: "tracking-token" },
+      });
+    publishUploads++;
+    return route.fulfill({
+      json: {
+        token: "delivery-token",
+        deliveries: [
+          { platform: "instagram", state: "scheduled" },
+          { platform: "youtube", state: "scheduled" },
+        ],
+        scheduledAt: new Date(Date.now() + 86400000).toISOString(),
+        done: false,
+      },
+    });
+  });
+  await page
+    .getByRole("button", { name: "Schedule on selected platforms" })
+    .click();
+  await expect(
+    page.getByText("Delivery status", { exact: true }),
+  ).toBeVisible();
+  expect(publishUploads).toBe(1);
+  await expect(
+    page.getByRole("button", { name: "Schedule on selected platforms" }),
   ).toBeDisabled();
-  await page.getByRole("button", { name: "Stop generation" }).click();
-  await expect(page.getByRole("alert")).toContainText("Generation stopped");
-  pending?.();
-  await expect(page.locator(".output-sheet")).toHaveCount(0);
-  await expect(page.locator("#video-input")).toHaveValue(/basil/);
+  await page.reload();
+  await expect(
+    page.getByText("Delivery status", { exact: true }),
+  ).toBeVisible();
+});
+test("mobile: usable first run, labels, keyboard, no overflow; stale plan cannot advance", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await setup(page);
+  await page.screenshot({ path: "artifacts/flow-mobile.png", fullPage: true });
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await toRecording(page);
+  await page.getByRole("button", { name: "Back to plan" }).click();
+  await page
+    .getByLabel("Your reel idea")
+    .fill("A completely new reel topic about balcony gardening.");
+  await expect(
+    page.getByRole("button", { name: "Use this plan & record" }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "How it works" }).click();
+  await expect(
+    page.getByRole("heading", { name: "A little voice goes a long way." }),
+  ).toBeVisible();
+});
+test("errors preserve input and failed generation never advances or fabricates output", async ({
+  page,
+}) => {
+  await setup(page);
+  await page.route("**/api/plan", (route) =>
+    route.fulfill({
+      status: 503,
+      json: { error: "The writing service is busy. Try again." },
+    }),
+  );
+  await page
+    .getByRole("button", { name: "Try an example", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Generate reel ideas", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText("busy");
+  await expect(page.getByLabel("Your reel idea")).not.toBeEmpty();
+  await expect(
+    page.getByRole("heading", { name: "Pick your starting point" }),
+  ).toHaveCount(0);
 });

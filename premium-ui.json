@@ -1,8 +1,21 @@
 {
   "profile": "product-admin",
-  "sourceRoots": ["app", "lib"],
+  "sourceRoots": [
+    "app",
+    "lib",
+    "components/studio"
+  ],
   "locale": "en-IN",
   "canonicalMap": "UX-CONTRACT.md",
-  "requiredCapabilities": ["Select/Listbox", "Form", "Scrollbar", "Toast"],
-  "ownership": { "Select/Listbox": "native" }
+  "requiredCapabilities": [
+    "Select/Listbox",
+    "Form",
+    "Scrollbar",
+    "Toast",
+    "Date"
+  ],
+  "ownership": {
+    "Select/Listbox": "native",
+    "Date": "native"
+  }
 }

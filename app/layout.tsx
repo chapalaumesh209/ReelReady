@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import "./globals.css";
 export const metadata: Metadata = {
-  title: "ReelReady — Speak once. Get your plan and your posts.",
+  title: "ReelReady — Plan, record, translate and publish.",
   description:
-    "Turn your video idea into a recording plan or a multilingual publishing kit. No sign-up. Made for your voice.",
+    "Plan your reel, upload the recording, create an English voiceover and publish across platforms. No ReelReady sign-up. Made for your voice.",
   icons: { icon: "/favicon.svg" },
 };
 export default function RootLayout({
