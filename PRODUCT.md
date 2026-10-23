@@ -32,7 +32,7 @@ ReelReady. Original voice-wave identity inspired by Wispr Flow. Smooth interface
 
 ## Evidence on Hand
 
-User's detailed accepted specifications in this chat. No verified time-saving benchmark. Sample content must be labelled. Real model connection currently pending.
+User's detailed accepted specifications in this chat. No verified time-saving benchmark. Sample content must be labelled. Google Gemini generation is connected server-side. Output is schema-validated, checked for platform length and script, and repaired once when needed. Creator-provided links and disclosure text are preserved.
 
 ## Product Principles
 

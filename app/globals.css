@@ -1180,3 +1180,10 @@ kbd {
     background: CanvasText;
   }
 }
+
+.output-warning {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--error);
+  margin: 8px 0;
+}

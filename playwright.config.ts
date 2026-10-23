@@ -5,7 +5,15 @@ export default defineConfig({
   workers: 1,
   reporter: [
     ["list"],
-    ["json", { outputFile: "artifacts/browser-results.json" }],
+    [
+      "json",
+      {
+        outputFile:
+          process.env.RUN_LIVE_TESTS === "1"
+            ? "artifacts/live-results.json"
+            : "artifacts/browser-results.json",
+      },
+    ],
   ],
   use: {
     baseURL: "http://127.0.0.1:3000",

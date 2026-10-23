@@ -191,7 +191,13 @@ export default function Home() {
     }
     setReady(true);
     const platform = navigator.platform.toLowerCase();
-    setShortcut(platform.includes("mac") ? "Fn" : "Ctrl + Win");
+    setShortcut(
+      /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+        ? "mobile"
+        : platform.includes("mac")
+          ? "Fn"
+          : "Ctrl + Win",
+    );
     const controller = new AbortController();
     fetch("/api/generate", { signal: controller.signal })
       .then(async (r) => (await r.json()) as { configured: boolean })
@@ -263,7 +269,7 @@ export default function Home() {
           kit: {
             ...old.kit,
             outputs: old.kit.outputs.map((o) =>
-              o.id === id ? { ...o, text } : o,
+              o.id === id ? { ...o, text, warning: undefined } : o,
             ),
           },
         },
@@ -331,6 +337,11 @@ export default function Home() {
         }),
         signal: controller.signal,
       });
+      if (!response.headers.get("content-type")?.includes("application/json")) {
+        throw new Error(
+          "We could not reach the writing service. Your input is saved—please try again.",
+        );
+      }
       const data = (await response.json()) as Kit & {
         error?: string;
         clarification?: string;
@@ -413,6 +424,7 @@ export default function Home() {
               type="button"
               className="flow-button"
               id="flow-help"
+              disabled={!ready}
               aria-expanded={helpOpen}
               aria-controls="flow-guide"
               onClick={() => setHelpOpen(!helpOpen)}
@@ -423,8 +435,9 @@ export default function Home() {
               <div id="flow-guide" className="help-popover">
                 <strong>Your voice, your shortcut.</strong>
                 <p>
-                  Click a text box, hold your Wispr Flow shortcut, and speak.
-                  Release to insert your words.
+                  Focus a text box and dictate with Wispr Flow. On desktop, hold
+                  your configured shortcut and release to insert your words. On
+                  mobile, use the Flow keyboard or bubble.
                 </p>
                 <p>
                   On desktop, enable Flow’s Command Mode to revise selected
@@ -475,6 +488,7 @@ export default function Home() {
         <section
           className="studio"
           id="composer"
+          data-ready={ready}
           aria-label="Create your content"
         >
           <div
@@ -529,7 +543,8 @@ export default function Home() {
                   if (
                     e.key === "Enter" &&
                     !e.shiftKey &&
-                    !e.nativeEvent.isComposing
+                    !e.nativeEvent.isComposing &&
+                    e.nativeEvent.keyCode !== 229
                   ) {
                     e.preventDefault();
                     void generate();
@@ -551,7 +566,14 @@ export default function Home() {
                 <span id="input-hint">
                   <Mic size={14} />
                   <span>
-                    Hold <kbd>{shortcut}</kbd> to speak with Flow, or just type
+                    {shortcut === "mobile" ? (
+                      <>Use the Flow keyboard or bubble, or just type</>
+                    ) : (
+                      <>
+                        Hold <kbd>{shortcut}</kbd> to speak with Flow, or just
+                        type
+                      </>
+                    )}
                   </span>
                 </span>
                 <span className="input-count">
@@ -616,6 +638,7 @@ export default function Home() {
               <button
                 type="button"
                 className="details-toggle"
+                disabled={!ready}
                 aria-expanded={detailsOpen}
                 aria-controls="creator-details"
                 onClick={() => setDetailsOpen(!detailsOpen)}
@@ -788,8 +811,9 @@ export default function Home() {
             )}
             {kit.sample && (
               <p className="sample-notice">
-                This is a sample preview, not a response to custom content. Live
-                generation needs a provider connection.
+                {configured
+                  ? "This is a saved sample preview. Generate again to create fresh results from your description."
+                  : "This is a sample preview, not a response to custom content. Live generation needs a provider connection."}
               </p>
             )}
             <div className="output-list">
@@ -840,6 +864,9 @@ export default function Home() {
                       className="output-text"
                       maxLength={15000}
                     />
+                    {output.warning && (
+                      <p className="output-warning">{output.warning}</p>
+                    )}
                     <div className="output-meta">
                       <span>
                         {output.id === "x"
@@ -937,12 +964,19 @@ export default function Home() {
       >
         {notice}
       </div>
-      {notice && (copied || notice.startsWith("Your saved")) && (
-        <div className="toast" aria-hidden="true">
-          <Check size={15} />
-          {notice}
-        </div>
-      )}
+      {notice &&
+        (copied ||
+          notice.startsWith("Your saved") ||
+          notice.startsWith("Clipboard")) && (
+          <div className="toast" aria-hidden="true">
+            {notice.startsWith("Clipboard") ? (
+              <AlertCircle size={15} />
+            ) : (
+              <Check size={15} />
+            )}
+            {notice}
+          </div>
+        )}
     </div>
   );
 }

@@ -1,16 +1,31 @@
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { exampleKit } from "../lib/content";
+import type { Page } from "@playwright/test";
+async function mockExamples(page: Page) {
+  await page.route("**/api/generate", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: { configured: false } });
+      return;
+    }
+    const data = route.request().postDataJSON();
+    await route.fulfill({
+      json: exampleKit(data.mode, data.language, data.script),
+    });
+  });
+}
 
 test("open studio: examples, validation, editable outputs, persistence, copy, and mode isolation", async ({
   page,
   context,
 }) => {
+  await mockExamples(page);
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.setViewportSize({ width: 1440, height: 1100 });
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  await expect(page.locator("kbd")).not.toHaveText("your Flow shortcut");
+  await expect(page.locator("#composer")).toHaveAttribute("data-ready", "true");
   await expect(
     page.getByRole("button", { name: /sign in|log in|sign up/i }),
   ).toHaveCount(0);
@@ -98,11 +113,18 @@ test("open studio: examples, validation, editable outputs, persistence, copy, an
 test("mobile, native selects, optional details, help, keyboard, and reduced motion", async ({
   page,
 }) => {
+  await mockExamples(page);
+  await page.addInitScript(() =>
+    Object.defineProperty(navigator, "userAgent", {
+      value:
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
+    }),
+  );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   await page.evaluate(() => document.fonts.ready);
-  await expect(page.locator("kbd")).not.toHaveText("your Flow shortcut");
+  await expect(page.locator("#composer")).toHaveAttribute("data-ready", "true");
   await page.screenshot({
     path: "artifacts/mobile-initial.png",
     fullPage: true,
@@ -156,7 +178,7 @@ test("failure and slow response preserve input; cancel prevents stale output", a
   page,
 }) => {
   await page.goto("/");
-  await expect(page.locator("kbd")).not.toHaveText("your Flow shortcut");
+  await expect(page.locator("#composer")).toHaveAttribute("data-ready", "true");
   await page
     .locator("#video-input")
     .fill("I filmed a real video about growing basil on a sunny balcony.");

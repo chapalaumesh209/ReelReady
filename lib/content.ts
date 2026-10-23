@@ -2,7 +2,12 @@ import twitterText from "twitter-text";
 export type Mode = "before" | "after";
 export type Language = "English" | "Telugu" | "Hindi";
 export type Script = "native" | "roman";
-export type Output = { id: string; title: string; text: string };
+export type Output = {
+  id: string;
+  title: string;
+  text: string;
+  warning?: string;
+};
 export type Kit = {
   mode: Mode;
   language: Language;
