@@ -1254,7 +1254,7 @@ export default function Home() {
               {original && (
                 <div className="video-block">
                   <video
-                    src={originalURL}
+                    src={originalURL || undefined}
                     controls
                     playsInline
                     preload="metadata"

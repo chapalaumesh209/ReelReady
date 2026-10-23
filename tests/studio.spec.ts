@@ -109,6 +109,8 @@ test("desktop: connected flow, local video, review, real WASM export, captions a
   page,
 }) => {
   test.setTimeout(180000);
+  const browserErrors:string[]=[];
+  page.on("console",message=>{if(message.type()==="error")browserErrors.push(message.text());});
   await page.setViewportSize({ width: 1440, height: 1050 });
   await setup(page);
   await page.screenshot({ path: "artifacts/flow-desktop.png", fullPage: true });
@@ -206,6 +208,7 @@ test("desktop: connected flow, local video, review, real WASM export, captions a
   await expect(
     page.getByText("Delivery status", { exact: true }),
   ).toBeVisible();
+  expect(browserErrors).toEqual([]);
 });
 test("mobile: usable first run, labels, keyboard, no overflow; stale plan cannot advance", async ({
   page,
