@@ -9,12 +9,39 @@ import {
   session,
   sign,
 } from "@/lib/server";
+import { storedURL } from "@/lib/supabase";
 import { googleFile, googleHeaders, videoStream } from "@/lib/media-server";
 export async function POST(req: Request) {
   try {
     const visitor = await session(req);
     limit(visitor.id, "upload", 12);
-    const { size, mime, stream } = await videoStream(req);
+    let source = req;
+    if (req.headers.get("content-type")?.includes("application/json")) {
+      const { assetToken } = await body(
+        req,
+        z.object({ assetToken: z.string().max(5000) }),
+      );
+      const { cap, url } = await storedURL(req, assetToken, 600);
+      const remote = await fetch(url, {
+        signal: AbortSignal.any([req.signal, AbortSignal.timeout(300000)]),
+      });
+      if (!remote.ok || !remote.body)
+        throw new GenerationError(
+          "The saved recording could not be opened for analysis. Please retry.",
+          502,
+        );
+      source = new Request(req.url, {
+        method: "POST",
+        headers: {
+          "Content-Type": String(cap.mime),
+          "X-File-Size": String(cap.size),
+        },
+        body: remote.body,
+        duplex: "half",
+        signal: req.signal,
+      } as RequestInit);
+    }
+    const { size, mime, stream } = await videoStream(source);
     const signal = AbortSignal.any([req.signal, AbortSignal.timeout(120000)]);
     const start = await fetch(
       "https://generativelanguage.googleapis.com/upload/v1beta/files",
@@ -57,8 +84,10 @@ export async function POST(req: Request) {
     } as RequestInit);
     if (!response.ok)
       throw new GenerationError(
-        "The video upload did not finish. Please try again.",
-        502,
+        response.status === 413 || response.status === 400
+          ? "The video is saved, but Gemini could not accept it under its current file-processing limits. Use a smaller analysis export for this step."
+          : "The analysis service could not receive this video. The saved original is safe; please retry.",
+        response.status === 413 ? 413 : 502,
       );
     const { file } = (await response.json()) as {
       file: { name: string; uri: string; mimeType: string; state: string };

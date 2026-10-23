@@ -94,6 +94,11 @@ export function validatePublish(data: PublishInput) {
         400,
       );
   }
+  if (data.platforms.includes("youtube") && data.duration > 180)
+    throw new GenerationError(
+      "YouTube Shorts accepts videos up to 3 minutes. Choose another destination or export a shorter version.",
+      400,
+    );
   if (data.platforms.includes("youtube") && data.width > data.height)
     throw new GenerationError(
       "YouTube Shorts needs a square or vertical video. Upload a suitable export or deselect YouTube.",

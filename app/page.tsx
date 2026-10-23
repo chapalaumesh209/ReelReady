@@ -24,7 +24,6 @@ import {
   platforms,
   platformNames,
   languages,
-  MAX_VIDEO_BYTES,
   type Platform,
   type Plan,
   type Analysis,
@@ -46,6 +45,8 @@ import {
   normalizeVideo,
   exportDub,
 } from "@/lib/browser-media";
+import type { StoredVideo } from "@/lib/supabase";
+import { cloudUpload } from "@/lib/storage-upload";
 type Details = {
   voice: string;
   brand: string;
@@ -71,6 +72,8 @@ type Draft = {
   kitLanguage: Language;
   details: Details;
   fileName: string;
+  originalAsset: StoredVideo | null;
+  englishAsset: StoredVideo | null;
   meta: { duration: number; width: number; height: number } | null;
   dubScript: string;
   variant: "original" | "english";
@@ -103,6 +106,8 @@ function fresh(): Draft {
     kitLanguage: "English",
     details: { voice: "", brand: "", link: "", disclosure: "" },
     fileName: "",
+    originalAsset: null,
+    englishAsset: null,
     meta: null,
     dubScript: "",
     variant: "original",
@@ -160,12 +165,20 @@ export default function Home() {
     [help, setHelp] = useState(false),
     [storageWarning, setStorageWarning] = useState(false),
     [newConfirm, setNewConfirm] = useState(false),
-    [pickerAttempted, setPickerAttempted] = useState(false);
+    [replanConfirm, setReplanConfirm] = useState(false),
+    [pickerAttempted, setPickerAttempted] = useState(false),
+    [cloudAvailable, setCloudAvailable] = useState<boolean | null>(null),
+    [cloudHydrated, setCloudHydrated] = useState(false),
+    [cloudSave, setCloudSave] = useState("local");
+  const localDraftPresent = useRef(false);
   const controller = useRef<AbortController | null>(null),
     operation = useRef(false),
     headingRef = useRef<HTMLHeadingElement>(null);
-  const patch = (values: Partial<Draft>) =>
+  const patch = (values: Partial<Draft>) => {
+    localDraftPresent.current = true;
+    if (cloudAvailable) setCloudSave("saving");
     setDraft((d) => ({ ...d, ...values }));
+  };
   async function refreshConnections() {
     try {
       const state = await responseJSON<Connections & { aiConfigured: boolean }>(
@@ -189,6 +202,7 @@ export default function Home() {
       try {
         const raw = localStorage.getItem(key);
         if (raw) {
+          localDraftPresent.current = true;
           const saved = JSON.parse(raw);
           if (
             saved.version === 2 &&
@@ -248,23 +262,139 @@ export default function Home() {
       }
   }, [draft, ready]);
   useEffect(() => {
-    if (!original) {
-      setOriginalURL("");
-      return;
-    }
-    const u = URL.createObjectURL(original);
-    setOriginalURL(u);
-    return () => URL.revokeObjectURL(u);
-  }, [original]);
+    if (!connectionLoaded) return;
+    void fetch("/api/storage")
+      .then((r) => responseJSON<{ configured: boolean }>(r))
+      .then((s) => setCloudAvailable(s.configured))
+      .catch(() => setCloudAvailable(false));
+  }, [connectionLoaded]);
   useEffect(() => {
-    if (!dubbed) {
-      setDubURL("");
-      return;
+    let alive = true;
+    let localURL = "";
+    if (original) {
+      localURL = URL.createObjectURL(original);
+      setOriginalURL(localURL);
+    } else if (draft.originalAsset) {
+      void fetch(
+        `/api/storage?token=${encodeURIComponent(draft.originalAsset.token)}`,
+      )
+        .then((r) => responseJSON<{ url: string }>(r))
+        .then((d) => {
+          if (alive) setOriginalURL(d.url);
+        })
+        .catch((e) => {
+          if (alive) setError(e.message);
+        });
+    } else setOriginalURL("");
+    return () => {
+      alive = false;
+      if (localURL) URL.revokeObjectURL(localURL);
+    };
+  }, [original, draft.originalAsset]);
+  useEffect(() => {
+    let alive = true;
+    let localURL = "";
+    if (dubbed) {
+      localURL = URL.createObjectURL(dubbed);
+      setDubURL(localURL);
+    } else if (draft.englishAsset) {
+      void fetch(
+        `/api/storage?token=${encodeURIComponent(draft.englishAsset.token)}`,
+      )
+        .then((r) => responseJSON<{ url: string }>(r))
+        .then((d) => {
+          if (alive) setDubURL(d.url);
+        })
+        .catch((e) => {
+          if (alive) setError(e.message);
+        });
+    } else setDubURL("");
+    return () => {
+      alive = false;
+      if (localURL) URL.revokeObjectURL(localURL);
+    };
+  }, [dubbed, draft.englishAsset]);
+  useEffect(() => {
+    if (!ready || !cloudAvailable) return;
+    let alive = true;
+    void fetch("/api/draft")
+      .then((r) => responseJSON<{ state: Draft | null }>(r))
+      .then(({ state }) => {
+        if (
+          alive &&
+          state &&
+          !localDraftPresent.current &&
+          state.version === 2 &&
+          typeof state.id === "string"
+        ) {
+          setDraft({ ...fresh(), ...state });
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setCloudHydrated(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [ready, cloudAvailable]);
+  useEffect(() => {
+    if (!ready || !cloudAvailable || !cloudHydrated) return;
+    setCloudSave("saving");
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      void fetch("/api/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state: draft }),
+        signal: controller.signal,
+      })
+        .then((r) => {
+          if (!r.ok) throw new Error();
+          setCloudSave("saved");
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setCloudSave("local");
+        });
+    }, 1200);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [draft, ready, cloudAvailable, cloudHydrated]);
+  const hasOriginal = !!original || !!draft.originalAsset;
+  async function videoBlob(kind: "original" | "english", signal: AbortSignal) {
+    const local = kind === "original" ? original : dubbed;
+    if (local) return local;
+    const asset =
+      kind === "original" ? draft.originalAsset : draft.englishAsset;
+    if (!asset) throw new Error("Choose your recording first.");
+    const { url } = await responseJSON<{ url: string }>(
+      await fetch(`/api/storage?token=${encodeURIComponent(asset.token)}`, {
+        signal,
+      }),
+    );
+    const response = await fetch(url, { signal });
+    if (!response.ok)
+      throw new Error("The saved video could not be downloaded. Please retry.");
+    return response.blob();
+  }
+  async function deleteStored(asset: StoredVideo | null | undefined) {
+    if (!asset || draft.job) return;
+    try {
+      await responseJSON(
+        await fetch("/api/storage", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: asset.token }),
+        }),
+      );
+    } catch {
+      setNotice(
+        "This cloud copy could not be removed yet. You can manage stored files in Supabase.",
+      );
     }
-    const u = URL.createObjectURL(dubbed);
-    setDubURL(u);
-    return () => URL.revokeObjectURL(u);
-  }, [dubbed]);
+  }
   useEffect(() => {
     setPreview(draft.variant === "english" && dubURL ? dubURL : originalURL);
   }, [draft.variant, originalURL, dubURL]);
@@ -320,7 +450,12 @@ export default function Home() {
       ? list.filter((v) => v !== value)
       : [...list, value];
   }
-  function planGenerate() {
+  function planGenerate(confirmed = false) {
+    if (hasOriginal && !confirmed) {
+      setReplanConfirm(true);
+      return;
+    }
+    setReplanConfirm(false);
     void run("Finding three reel ideas…", async (signal) => {
       if (draft.input.trim().length < 20)
         throw new Error(
@@ -331,13 +466,6 @@ export default function Home() {
       const when = new Date(draft.scheduledLocal);
       if (!Number.isFinite(when.getTime()))
         throw new Error("Choose the date and time you want to publish.");
-      if (
-        original &&
-        !window.confirm(
-          "Generating a new plan clears the current recording, review and delivery from this browser. Continue?",
-        )
-      )
-        return;
       const plan = await post<Plan>(
         "/api/plan",
         {
@@ -351,6 +479,8 @@ export default function Home() {
         signal,
       );
       if (draft.token) void removeRemote(draft.token);
+      void deleteStored(draft.originalAsset);
+      void deleteStored(draft.englishAsset);
       setOriginal(null);
       setDubbed(null);
       await Promise.all([
@@ -367,6 +497,8 @@ export default function Home() {
         kits: {},
         meta: null,
         fileName: "",
+        originalAsset: null,
+        englishAsset: null,
         job: null,
         dubScript: "",
         variant: "original",
@@ -394,16 +526,19 @@ export default function Home() {
       const file = normalizeVideo(selectedFile);
       if (!["video/mp4", "video/quicktime", "video/webm"].includes(file.type))
         throw new Error("Choose an MP4, MOV or WebM video.");
-      if (file.size > MAX_VIDEO_BYTES)
-        throw new Error("Keep the video under 80 MB for this version.");
       const meta = await metadata(file, signal);
-      if (meta.duration > 180 || meta.duration < 1)
-        throw new Error("Choose a reel between 1 second and 3 minutes long.");
+
       if (draft.token) void removeRemote(draft.token);
+      await Promise.all([
+        deleteStored(draft.originalAsset),
+        deleteStored(draft.englishAsset),
+      ]);
       setOriginal(file);
       setDubbed(null);
       patch({
         fileName: file.name,
+        originalAsset: null,
+        englishAsset: null,
         meta,
         token: "",
         analysis: null,
@@ -412,13 +547,43 @@ export default function Home() {
         dubScript: "",
         variant: "original",
       });
-      try {
-        await storeMedia("original", file);
-        await storeMedia("dubbed", null);
-      } catch {
-        setStorageWarning(true);
+      let available = cloudAvailable;
+      if (available === null) {
+        available = (
+          await responseJSON<{ configured: boolean }>(
+            await fetch("/api/storage", { signal }),
+          )
+        ).configured;
+        setCloudAvailable(available);
       }
-      setNotice("Recording added. Continue to review when you’re ready.");
+      if (available) {
+        const originalAsset = await cloudUpload(
+          file,
+          file.name,
+          draft.id,
+          "original",
+          signal,
+          setBusy,
+        );
+        patch({ originalAsset });
+        await Promise.all([
+          storeMedia("original", null),
+          storeMedia("dubbed", null),
+        ]).catch(() => {});
+        setNotice(
+          "Recording uploaded and saved privately in Supabase. Continue to review when you’re ready.",
+        );
+      } else {
+        try {
+          await storeMedia("original", file);
+          await storeMedia("dubbed", null);
+        } catch {
+          setStorageWarning(true);
+        }
+        setNotice(
+          "Recording added. Saved in this browser; cloud storage is not connected yet.",
+        );
+      }
     });
   }
   async function ensureVideo(signal: AbortSignal) {
@@ -434,16 +599,31 @@ export default function Home() {
         if (signal.aborted) throw e;
       }
     }
-    if (!original) throw new Error("Upload your recording first.");
+    if (!hasOriginal) throw new Error("Upload your recording first.");
+    let asset = draft.originalAsset;
+    if (cloudAvailable && !asset && original) {
+      asset = await cloudUpload(
+        original,
+        draft.fileName,
+        draft.id,
+        "original",
+        signal,
+        setBusy,
+      );
+      patch({ originalAsset: asset });
+    }
     setBusy("Uploading your recording for understanding…");
+    const source = original;
     const file = await responseJSON<{ token: string; state: string }>(
       await fetch("/api/video", {
         method: "POST",
-        headers: {
-          "Content-Type": original.type,
-          "X-File-Size": String(original.size),
-        },
-        body: original,
+        headers: asset
+          ? { "Content-Type": "application/json" }
+          : {
+              "Content-Type": source!.type,
+              "X-File-Size": String(source!.size),
+            },
+        body: asset ? JSON.stringify({ assetToken: asset.token }) : source,
         signal,
       }),
     );
@@ -511,7 +691,15 @@ export default function Home() {
         },
         signal,
       );
-      patch({ analysis, token, kits: {}, dubScript: "", variant: "original" });
+      await deleteStored(draft.englishAsset);
+      patch({
+        analysis,
+        token,
+        kits: {},
+        dubScript: "",
+        variant: "original",
+        englishAsset: null,
+      });
       setDubbed(null);
       await storeMedia("dubbed", null).catch(() => setStorageWarning(true));
       setBusy("Writing your platform captions…");
@@ -534,7 +722,7 @@ export default function Home() {
   }
   function createDub() {
     void run("Creating your English voiceover…", async (signal) => {
-      if (!original || !draft.analysis?.englishScript || !draft.meta)
+      if (!hasOriginal || !draft.analysis?.englishScript || !draft.meta)
         throw new Error(
           "Review the recording and approve an English script first.",
         );
@@ -550,23 +738,38 @@ export default function Home() {
       }
       const audio = await response.blob();
       const result = await exportDub(
-        original,
+        await videoBlob("original", signal),
         audio,
         draft.meta.duration,
         setBusy,
         signal,
       );
-      if (result.size > MAX_VIDEO_BYTES)
-        throw new Error(
-          "The English export is over 80 MB. Use a smaller recording and try again.",
-        );
       setDubbed(result);
-      patch({ dubScript: draft.analysis.englishScript, variant: "english" });
-      try {
-        await storeMedia("dubbed", result);
-      } catch {
-        setStorageWarning(true);
-      }
+      let englishAsset: StoredVideo | null = null;
+      if (cloudAvailable)
+        englishAsset = await cloudUpload(
+          new File([result], "reelready-english.mp4", {
+            type: "video/mp4",
+            lastModified: Date.now(),
+          }),
+          "reelready-english.mp4",
+          draft.id,
+          "english",
+          signal,
+          setBusy,
+        );
+      await deleteStored(draft.englishAsset);
+      patch({
+        dubScript: draft.analysis.englishScript,
+        variant: "english",
+        englishAsset,
+      });
+      if (!englishAsset)
+        try {
+          await storeMedia("dubbed", result);
+        } catch {
+          setStorageWarning(true);
+        }
       setNotice(
         "English video ready. Watch it and check the pronunciation before publishing.",
       );
@@ -616,9 +819,15 @@ export default function Home() {
   }
   const activeKit = draft.kits[draft.kitLanguage],
     idea = draft.plan?.ideas[draft.selected],
-    dubValid = !!dubbed && draft.dubScript === draft.analysis?.englishScript;
+    dubValid =
+      (!!dubbed || !!draft.englishAsset) &&
+      draft.dubScript === draft.analysis?.englishScript;
   const finalVideo =
     draft.variant === "english" && dubValid ? dubbed : original;
+  const finalAsset =
+    draft.variant === "english" && dubValid
+      ? draft.englishAsset
+      : draft.originalAsset;
   const allConnected = draft.platforms.every(
     (p) => connections.accounts[p]?.connected,
   );
@@ -641,7 +850,7 @@ export default function Home() {
         ? "Scheduling your reel…"
         : "Sending your reel…",
       async (signal) => {
-        if (!finalVideo || !draft.meta || !activeKit)
+        if ((!finalVideo && !finalAsset) || !draft.meta || !activeKit)
           throw new Error("Complete the video and caption review first.");
         if (draft.variant === "english" && !dubValid)
           throw new Error(
@@ -660,7 +869,8 @@ export default function Home() {
           x: finalTexts.x || "",
           language: draft.kitLanguage,
           dubbed: draft.variant === "english",
-          size: finalVideo.size,
+          size: finalAsset?.size || finalVideo!.size,
+          assetToken: finalAsset?.token,
           ...draft.meta,
         };
         const prepared = await post<{ token: string; tracking: string }>(
@@ -680,21 +890,27 @@ export default function Home() {
         };
         patch({ job: pending });
         try {
-          const job = await responseJSON<PublishJob>(
-            await fetch("/api/publish", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/x-reelready-video",
-                "X-Video-Type": finalVideo.type,
-                "X-File-Size": String(finalVideo.size),
-              },
-              body: new Blob([
-                JSON.stringify({ token: prepared.token }) + "\n",
-                finalVideo,
-              ]),
-              signal,
-            }),
-          );
+          const job = finalAsset
+            ? await post<PublishJob>(
+                "/api/publish",
+                { action: "send", token: prepared.token },
+                signal,
+              )
+            : await responseJSON<PublishJob>(
+                await fetch("/api/publish", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/x-reelready-video",
+                    "X-Video-Type": finalVideo!.type,
+                    "X-File-Size": String(finalVideo!.size),
+                  },
+                  body: new Blob([
+                    JSON.stringify({ token: prepared.token }) + "\n",
+                    finalVideo!,
+                  ]),
+                  signal,
+                }),
+              );
           patch({ job });
           setNotice(
             job.deliveries.some((d) => d.state === "scheduled")
@@ -712,6 +928,10 @@ export default function Home() {
   function reset() {
     void run("Clearing this browser’s reel…", async () => {
       if (draft.token) await removeRemote(draft.token);
+      await Promise.all([
+        deleteStored(draft.originalAsset),
+        deleteStored(draft.englishAsset),
+      ]);
       await Promise.all([
         storeMedia("original", null),
         storeMedia("dubbed", null),
@@ -735,7 +955,7 @@ export default function Home() {
     i === 0 ||
     (i === 1 &&
       !!draft.plan &&
-      (!!original || signature(draft) === draft.planSignature)) ||
+      (hasOriginal || signature(draft) === draft.planSignature)) ||
     (i === 2 && !!draft.analysis) ||
     (i === 3 && !!draft.analysis && !!activeKit);
   return (
@@ -1063,11 +1283,35 @@ export default function Home() {
                 <span className="hint">
                   Three ideas. One reel. Your choice.
                 </span>
-                <button className="primary" onClick={planGenerate}>
+                <button className="primary" onClick={() => planGenerate()}>
                   {draft.plan ? "Regenerate ideas" : "Generate reel ideas"}
                   <ArrowRight size={17} />
                 </button>
               </div>
+              {replanConfirm && (
+                <div
+                  className="new-confirm"
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setReplanConfirm(false);
+                  }}
+                >
+                  <p>
+                    Replace this reel’s plan, recording and review? Download
+                    your video first. Accepted schedules stay active and keep
+                    their cloud videos.
+                  </p>
+                  <button
+                    className="secondary"
+                    autoFocus
+                    onClick={() => setReplanConfirm(false)}
+                  >
+                    Keep this plan
+                  </button>
+                  <button className="danger" onClick={() => planGenerate(true)}>
+                    Replace & regenerate
+                  </button>
+                </div>
+              )}
               {draft.plan && (
                 <div className="plan-results">
                   <div className="section-heading">
@@ -1088,7 +1332,7 @@ export default function Home() {
                           type="radio"
                           name="chosen-idea"
                           checked={draft.selected === i}
-                          disabled={!!original}
+                          disabled={hasOriginal}
                           onChange={() => patch({ selected: i })}
                         />
                         <div>
@@ -1227,7 +1471,7 @@ export default function Home() {
               >
                 <Upload size={25} />
                 <h3>
-                  {original
+                  {hasOriginal
                     ? "Your recording is here"
                     : "Your reel, ready for its next step"}
                 </h3>
@@ -1235,7 +1479,7 @@ export default function Home() {
                   Drop a video, paste a copied video file, or choose one below.
                 </p>
                 <label className="field-label" htmlFor="recording-file">
-                  {original ? "Replace recording" : "Upload video"}
+                  {hasOriginal ? "Replace recording" : "Upload video"}
                 </label>
                 <input
                   id="recording-file"
@@ -1276,10 +1520,10 @@ export default function Home() {
                   </button>
                 )}
                 <span className="hint">
-                  MP4, MOV or WebM · up to 80 MB · up to 3 minutes
+                  MP4, MOV or WebM · no ReelReady file-size cap
                 </span>
               </div>
-              {original && (
+              {hasOriginal && (
                 <div className="video-block">
                   <video
                     src={originalURL || undefined}
@@ -1293,15 +1537,22 @@ export default function Home() {
                     <span>
                       {Math.round(draft.meta?.duration || 0)}s ·{" "}
                       {draft.meta?.width} × {draft.meta?.height} ·{" "}
-                      {(original.size / 1024 / 1024).toFixed(1)} MB
+                      {(
+                        (original?.size || draft.originalAsset?.size || 0) /
+                        1024 /
+                        1024
+                      ).toFixed(1)}{" "}
+                      MB
                     </span>
                   </div>
                 </div>
               )}
               <p className="privacy-note">
-                Continue sends the recording to Google to understand its speech
-                and visuals. Your browser keeps the original; the analysis copy
-                expires within 48 hours.
+                {cloudAvailable
+                  ? "Recordings are saved privately in Supabase with resumable uploads. Your storage plan’s limits apply."
+                  : "Recordings stay in this browser until cloud storage is connected."}{" "}
+                Continue sends a copy to Google for analysis; that copy expires
+                within 48 hours.
               </p>
               <div className="action-row">
                 <button className="quiet" onClick={() => go(0)}>
@@ -1310,7 +1561,7 @@ export default function Home() {
                 </button>
                 <button
                   className="primary"
-                  disabled={!original}
+                  disabled={!hasOriginal}
                   onClick={analyze}
                 >
                   Review my recording
@@ -1406,7 +1657,7 @@ export default function Home() {
                   <button
                     className="secondary"
                     onClick={createDub}
-                    disabled={!original || !draft.analysis?.englishScript}
+                    disabled={!hasOriginal || !draft.analysis?.englishScript}
                   >
                     <Volume2 size={16} />
                     {dubValid
@@ -1534,7 +1785,7 @@ export default function Home() {
                 </button>
                 <button
                   className="primary"
-                  disabled={!activeKit || !original || textInvalid}
+                  disabled={!activeKit || !hasOriginal || textInvalid}
                   onClick={() => go(3)}
                 >
                   Review & publish
@@ -1779,7 +2030,7 @@ export default function Home() {
                   disabled={
                     !allConnected ||
                     !draft.platforms.length ||
-                    !finalVideo ||
+                    (!finalVideo && !finalAsset) ||
                     !activeKit ||
                     textInvalid ||
                     !!draft.job
@@ -1812,7 +2063,11 @@ export default function Home() {
         <div className="bottom-row">
           <span>
             <Mic size={14} />
-            Made for Wispr Flow. Open to everyone.
+            {cloudSave === "saved"
+              ? "Draft saved in Supabase"
+              : cloudSave === "saving"
+                ? "Saving draft…"
+                : "Made for Wispr Flow. Open to everyone."}
           </span>
           {ready && (
             <button
@@ -1828,8 +2083,9 @@ export default function Home() {
         {newConfirm && (
           <div className="new-confirm">
             <p>
-              Clear this reel from the browser? Download your video first.
-              Already scheduled or published posts are kept on their platforms.
+              Clear this reel and its unscheduled cloud videos? Download your
+              video first. Accepted schedules stay active and keep their cloud
+              videos. Published posts stay on their platforms.
             </p>
             <button
               className="secondary"

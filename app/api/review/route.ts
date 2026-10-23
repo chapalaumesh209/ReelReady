@@ -8,7 +8,7 @@ const input = z.object({
   idea: z.string().max(6000),
   revision: z.string().max(3000).default(""),
   previous: analysisSchema.nullable().default(null),
-  duration: z.number().min(1).max(180),
+  duration: z.number().positive(),
 });
 export async function POST(req: Request) {
   try {

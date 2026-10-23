@@ -48,12 +48,9 @@ export const publishInput = z.object({
   x: z.string().max(1000),
   language: z.enum(languages),
   dubbed: z.boolean(),
-  size: z
-    .number()
-    .int()
-    .positive()
-    .max(80 * 1024 * 1024),
-  duration: z.number().min(1).max(180),
+  assetToken: z.string().max(5000).optional(),
+  size: z.number().int().positive().refine(Number.isSafeInteger),
+  duration: z.number().positive(),
   width: z.number().positive(),
   height: z.number().positive(),
 });
@@ -76,4 +73,3 @@ export type Connections = {
     Record<Platform, { name: string; connected: boolean; reauth: boolean }>
   >;
 };
-export const MAX_VIDEO_BYTES = 80 * 1024 * 1024;

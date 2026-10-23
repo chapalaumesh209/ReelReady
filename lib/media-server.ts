@@ -1,5 +1,4 @@
 import { GenerationError, generationConfiguration } from "./generation";
-import { MAX_VIDEO_BYTES } from "./workflow";
 export function googleHeaders() {
   const { key } = generationConfiguration();
   if (!key)
@@ -11,13 +10,12 @@ export async function videoStream(req: Request, expectedSize?: number) {
   const size = Number(req.headers.get("x-file-size")),
     mime = req.headers.get("content-type")?.split(";")[0] || "";
   if (
-    !Number.isInteger(size) ||
+    !Number.isSafeInteger(size) ||
     size <= 0 ||
-    size > MAX_VIDEO_BYTES ||
     (expectedSize !== undefined && size !== expectedSize)
   )
     throw new GenerationError(
-      "Use a video under 80 MB. Its size must match the reviewed file.",
+      "The video size must be valid and match the reviewed file.",
       413,
     );
   if (
@@ -67,7 +65,7 @@ export async function videoStream(req: Request, expectedSize?: number) {
         return;
       }
       total += next.value.length;
-      if (total > size || total > MAX_VIDEO_BYTES) {
+      if (total > size) {
         await reader.cancel();
         controller.error(new Error("Upload too large"));
         return;

@@ -39,6 +39,9 @@ async function setup(page: Page) {
       },
     }),
   );
+  await page.route("**/api/storage", (route) =>
+    route.fulfill({ json: { configured: false } }),
+  );
   await page.route("**/api/plan", (route) => route.fulfill({ json: plan }));
   await page.route("**/api/review", (route) =>
     route.fulfill({ json: analysis }),
@@ -111,7 +114,11 @@ async function uploadRecording(page: Page) {
     buffer: Buffer.from(bytes),
   });
   await expect(page.getByText("Recording added.")).toBeVisible();
-  expect(await page.getByLabel("Choose recording").evaluate((input:HTMLInputElement)=>input.files?.[0]?.name)).toBe("breakfast.webm");
+  expect(
+    await page
+      .getByLabel("Choose recording")
+      .evaluate((input: HTMLInputElement) => input.files?.[0]?.name),
+  ).toBe("breakfast.webm");
 }
 test("desktop: connected flow, local video, review, real WASM export, captions and schedule receipt", async ({
   page,
@@ -126,12 +133,22 @@ test("desktop: connected flow, local video, review, real WASM export, captions a
   await page.screenshot({ path: "artifacts/flow-desktop.png", fullPage: true });
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await toRecording(page);
-  await page.screenshot({path:'artifacts/upload-desktop.png',fullPage:true});
-  await page.setViewportSize({width:390,height:844});
-  await page.screenshot({path:'artifacts/upload-mobile.png',fullPage:true});
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-  expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
-  await page.setViewportSize({width:1440,height:1050});
+  await page.screenshot({
+    path: "artifacts/upload-desktop.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: "artifacts/upload-mobile.png",
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.setViewportSize({ width: 1440, height: 1050 });
   await uploadRecording(page);
   await page.getByRole("button", { name: "Review my recording" }).click();
   await expect(page.getByLabel("English voiceover script")).toHaveValue(
@@ -255,6 +272,9 @@ test("errors preserve input and failed generation never advances or fabricates o
   page,
 }) => {
   await setup(page);
+  await page.route("**/api/storage", (route) =>
+    route.fulfill({ json: { configured: false } }),
+  );
   await page.route("**/api/plan", (route) =>
     route.fulfill({
       status: 503,
@@ -272,4 +292,56 @@ test("errors preserve input and failed generation never advances or fabricates o
   await expect(
     page.getByRole("heading", { name: "Pick your starting point" }),
   ).toHaveCount(0);
+});
+
+test("cloud limit rejection is visible, preserves the recording and retries storage before analysis", async ({
+  page,
+}) => {
+  await setup(page);
+  await page.unroute("**/api/storage");
+  let prepares = 0;
+  await page.route("**/api/draft", (route) =>
+    route.fulfill({
+      json:
+        route.request().method() === "GET" ? { state: null } : { saved: true },
+    }),
+  );
+  await page.route("**/api/storage", (route) => {
+    if (route.request().method() === "GET")
+      return route.fulfill({ json: { configured: true } });
+    prepares++;
+    return route.fulfill({
+      json: {
+        alreadyUploaded: false,
+        token: "asset",
+        path: "visitor/draft/original.webm",
+        uploadToken: "signed",
+        endpoint: "http://127.0.0.1:3000/test-storage",
+        publishableKey: "public",
+        bucket: "reelready-videos",
+      },
+    });
+  });
+  await page.route("**/test-storage", (route) =>
+    route.fulfill({ status: 413, body: "Maximum size exceeded" }),
+  );
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Generate reel ideas", exact: true }),
+  ).toBeEnabled();
+  await toRecording(page);
+  const bytes = await fixture(page);
+  await page
+    .getByLabel("Choose recording")
+    .setInputFiles({
+      name: "desk.webm",
+      mimeType: "video/webm",
+      buffer: Buffer.from(bytes),
+    });
+  await expect(page.getByRole("alert")).toContainText("project storage limit");
+  await expect(page.getByText("desk.webm", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Review my recording" }).click();
+  await expect.poll(() => prepares).toBe(2);
+  await expect(page.getByRole("alert")).toContainText("project storage limit");
+  await expect(page.getByLabel("English voiceover script")).toHaveCount(0);
 });

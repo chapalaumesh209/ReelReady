@@ -144,18 +144,18 @@ test("raw video stream validates file signature, size and actual bytes", async (
       }),
     ),
   );
-  await assert.rejects(() =>
-    videoStream(
-      new Request("http://localhost", {
-        method: "POST",
-        headers: {
-          "Content-Type": "video/mp4",
-          "X-File-Size": String(81 * 1024 * 1024),
-        },
-        body: bytes,
-      }),
-    ),
+  const large = await videoStream(
+    new Request("http://localhost", {
+      method: "POST",
+      headers: {
+        "Content-Type": "video/mp4",
+        "X-File-Size": String(8 * 1024 * 1024 * 1024),
+      },
+      body: bytes,
+    }),
   );
+  assert.equal(large.size, 8 * 1024 * 1024 * 1024);
+  await large.stream.cancel();
 });
 test("connection reads only the current anonymous profile and suppresses provider secrets", async () => {
   const old = globalThis.fetch;
@@ -342,4 +342,96 @@ test("video selection accepts valid filename MIME fallbacks and retains unsuppor
     ).type,
     "application/octet-stream",
   );
+});
+
+test("stored video publishing sends only its authorized signed URL and preserves scheduled text", async () => {
+  const old = globalThis.fetch,
+    names = [
+      "SUPABASE_URL",
+      "SUPABASE_PUBLISHABLE_KEY",
+      "SUPABASE_SECRET_KEY",
+      "UPLOAD_POST_API_KEY",
+    ] as const,
+    previous = Object.fromEntries(names.map((n) => [n, process.env[n]]));
+  process.env.SUPABASE_URL = "https://storage-project.supabase.co";
+  process.env.SUPABASE_PUBLISHABLE_KEY = "sb_publishable_test";
+  process.env.SUPABASE_SECRET_KEY = "sb_secret_test";
+  process.env.UPLOAD_POST_API_KEY = "test-key";
+  const cookie = await sign({ id: visitor }, "session", 60),
+    asset = await sign(
+      {
+        visitor,
+        path: `${visitor}/draft/original.mp4`,
+        size: 32,
+        mime: "video/mp4",
+        name: "original.mp4",
+      },
+      "stored-video",
+      60,
+    );
+  const token = await sign(
+    {
+      visitor,
+      data: { ...payload, assetToken: asset },
+      requestId: "cloud-request",
+    },
+    "publish",
+    60,
+  );
+  let sends = 0;
+  globalThis.fetch = async (input, options) => {
+    const url = String(input);
+    if (url.includes("/object/info/"))
+      return Response.json({
+        name: "original.mp4",
+        size: 32,
+        metadata: { size: 32 },
+      });
+    if (url.includes("/object/sign/")) {
+      const body = JSON.parse(String(options?.body));
+      assert.ok(body.expiresIn > 86400);
+      return Response.json({
+        signedURL:
+          "/object/sign/reelready-videos/original.mp4?token=scoped-read",
+      });
+    }
+    assert.equal(url, "https://api.upload-post.com/api/upload");
+    sends++;
+    const form = options?.body as FormData;
+    assert.ok(form instanceof FormData);
+    assert.equal(
+      form.get("video"),
+      "https://storage-project.supabase.co/storage/v1/object/sign/reelready-videos/original.mp4?token=scoped-read",
+    );
+    assert.equal(form.get("user"), profileName(visitor));
+    assert.equal(form.get("scheduled_date"), payload.scheduledAt);
+    assert.equal(form.get("youtube_title"), payload.youtubeTitle);
+    return Response.json(
+      { success: true, job_id: "cloud-job" },
+      { status: 202 },
+    );
+  };
+  try {
+    const make = (c: string) =>
+      new Request("http://localhost/api/publish", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          cookie: `rr_session=${c}`,
+        },
+        body: JSON.stringify({ action: "send", token }),
+      });
+    const result = await upload(make(cookie));
+    assert.equal(result.status, 200, await result.clone().text());
+    assert.equal(sends, 1);
+    const other = await sign({ id: crypto.randomUUID() }, "session", 60);
+    assert.equal((await upload(make(other))).status, 403);
+    assert.equal(sends, 1);
+  } finally {
+    globalThis.fetch = old;
+    for (const n of names) {
+      if (previous[n] === undefined) delete process.env[n];
+      else process.env[n] = previous[n];
+    }
+  }
 });

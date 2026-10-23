@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { storedURL } from "@/lib/supabase";
 import { GenerationError } from "@/lib/generation";
 import {
   body,
@@ -23,94 +24,147 @@ import { videoStream, publishingStream } from "@/lib/media-server";
 export async function POST(req: Request) {
   try {
     const visitor = await session(req);
+    let preparedCap: Record<string, unknown> | undefined;
     // Prepare a signed, immutable publishing request before sending the large video.
     if (req.headers.get("content-type")?.includes("application/json")) {
       limit(visitor.id, "publish-prepare", 12);
-      const data = await body(req, publishInput);
-      validatePublish(data);
-      const state = await connections(visitor.id);
-      if (!state.configured)
-        throw new GenerationError(
-          "Upload-Post is not connected on the server yet.",
-          503,
-        );
-      for (const p of data.platforms)
-        if (!state.accounts[p]?.connected)
+      const incoming = await body(
+        req,
+        z.union([
+          publishInput,
+          z.object({ action: z.literal("send"), token: z.string().max(96000) }),
+        ]),
+      );
+      if ("action" in incoming) {
+        preparedCap = await capability(req, incoming.token, "publish");
+      } else {
+        const data = incoming;
+        validatePublish(data);
+        const state = await connections(visitor.id);
+        if (!state.configured)
           throw new GenerationError(
-            `Connect your ${p} account before publishing.`,
-            409,
+            "Upload-Post is not connected on the server yet.",
+            503,
           );
-      // Same reel + same payload => same upstream job across retries, browser reloads and server instances.
-      const requestId = await digest(
-        JSON.stringify({ visitor: visitor.id, ...data }),
-      );
-      const token = await sign(
-        { visitor: visitor.id, data, requestId },
-        "publish",
-        3600,
-      );
-      const tracking = await sign(
-        {
-          visitor: visitor.id,
-          requestId,
-          platforms: data.platforms,
-          scheduledAt: data.scheduledAt,
-        },
-        "delivery",
-        366 * 86400,
-      );
-      return json({ token, tracking });
+        for (const p of data.platforms)
+          if (!state.accounts[p]?.connected)
+            throw new GenerationError(
+              `Connect your ${p} account before publishing.`,
+              409,
+            );
+        // Same reel + same payload => same upstream job across retries, browser reloads and server instances.
+        const requestId = await digest(
+          JSON.stringify({ visitor: visitor.id, ...data }),
+        );
+        const token = await sign(
+          { visitor: visitor.id, data, requestId },
+          "publish",
+          3600,
+        );
+        const tracking = await sign(
+          {
+            visitor: visitor.id,
+            requestId,
+            platforms: data.platforms,
+            scheduledAt: data.scheduledAt,
+          },
+          "delivery",
+          366 * 86400,
+        );
+        return json({ token, tracking });
+      }
     }
     limit(visitor.id, "publish-upload", 12);
-    const { token: uploadToken, videoRequest } = await publishingStream(req);
-    const cap = await capability(req, uploadToken, "publish");
+    let videoRequest: Request | undefined;
+    let cap = preparedCap;
+    if (!cap) {
+      const packed = await publishingStream(req);
+      videoRequest = packed.videoRequest;
+      cap = await capability(req, packed.token, "publish");
+    }
     const data = publishInput.parse(cap.data);
     validatePublish(data);
-    const { mime, stream, size } = await videoStream(videoRequest, data.size);
-    const boundary = `rr${crypto.randomUUID().replaceAll("-", "")}`,
-      enc = new TextEncoder();
-    let preamble = "";
-    for (const [key, value] of publishingFields(
-      data,
-      visitor.id,
-      String(cap.requestId),
-    ))
-      preamble += `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`;
-    preamble += `--${boundary}\r\nContent-Disposition: form-data; name="video"; filename="reel.${mime === "video/webm" ? "webm" : mime === "video/quicktime" ? "mov" : "mp4"}"\r\nContent-Type: ${mime}\r\n\r\n`;
-    const first = enc.encode(preamble),
-      last = enc.encode(`\r\n--${boundary}--\r\n`),
-      reader = stream.getReader();
-    let stage = 0;
-    const multipart = new ReadableStream<Uint8Array>({
-      async pull(c) {
-        if (stage === 0) {
-          stage = 1;
-          c.enqueue(first);
-          return;
-        }
-        const r = await reader.read();
-        if (!r.done) {
-          c.enqueue(r.value);
-          return;
-        }
-        c.enqueue(last);
-        c.close();
-      },
-      cancel() {
-        return reader.cancel();
-      },
-    });
-    const response = await uploadPost("/api/upload", {
-      method: "POST",
-      headers: {
-        "Content-Type": `multipart/form-data; boundary=${boundary}`,
-        "Content-Length": String(first.byteLength + size + last.byteLength),
-        "Idempotency-Key": String(cap.requestId),
-      },
-      body: multipart,
-      duplex: "half",
-      signal: AbortSignal.any([req.signal, AbortSignal.timeout(180000)]),
-    } as RequestInit);
+    let response: Response;
+    if (data.assetToken) {
+      const ttl = data.scheduledAt
+        ? Math.max(
+            3600,
+            Math.ceil((Date.parse(data.scheduledAt) - Date.now()) / 1000) +
+              2 * 86400,
+          )
+        : 86400;
+      const { url, cap: asset } = await storedURL(req, data.assetToken, ttl);
+      if (asset.size !== data.size)
+        return json(
+          { error: "The stored video does not match the reviewed file." },
+          409,
+        );
+      const form = new FormData();
+      for (const [key, value] of publishingFields(
+        data,
+        visitor.id,
+        String(cap.requestId),
+      ))
+        form.append(key, value);
+      form.append("video", url);
+      response = await uploadPost("/api/upload", {
+        method: "POST",
+        headers: { "Idempotency-Key": String(cap.requestId) },
+        body: form,
+        signal: AbortSignal.any([req.signal, AbortSignal.timeout(60000)]),
+      });
+    } else {
+      if (!videoRequest)
+        return json(
+          { error: "Upload the selected video before sending." },
+          400,
+        );
+      const { mime, stream, size } = await videoStream(videoRequest, data.size);
+      const boundary = `rr${crypto.randomUUID().replaceAll("-", "")}`,
+        enc = new TextEncoder();
+      let preamble = "";
+      for (const [key, value] of publishingFields(
+        data,
+        visitor.id,
+        String(cap.requestId),
+      ))
+        preamble += `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`;
+      preamble += `--${boundary}\r\nContent-Disposition: form-data; name="video"; filename="reel.${mime === "video/webm" ? "webm" : mime === "video/quicktime" ? "mov" : "mp4"}"\r\nContent-Type: ${mime}\r\n\r\n`;
+      const first = enc.encode(preamble),
+        last = enc.encode(`\r\n--${boundary}--\r\n`),
+        reader = stream.getReader();
+      let stage = 0;
+      const multipart = new ReadableStream<Uint8Array>({
+        async pull(c) {
+          if (stage === 0) {
+            stage = 1;
+            c.enqueue(first);
+            return;
+          }
+          const r = await reader.read();
+          if (!r.done) {
+            c.enqueue(r.value);
+            return;
+          }
+          c.enqueue(last);
+          c.close();
+        },
+        cancel() {
+          return reader.cancel();
+        },
+      });
+      response = await uploadPost("/api/upload", {
+        method: "POST",
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          "Content-Length": String(first.byteLength + size + last.byteLength),
+          "Idempotency-Key": String(cap.requestId),
+        },
+        body: multipart,
+        duplex: "half",
+        signal: AbortSignal.any([req.signal, AbortSignal.timeout(180000)]),
+      } as RequestInit);
+    }
     if (!response.ok) return providerFailure(response);
     const raw = (await response.json()) as Record<string, unknown>;
     if (raw.success === false)

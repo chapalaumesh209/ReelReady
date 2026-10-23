@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-Implementation choice under the user's instruction to build from scratch: React with the Sites Vinext starter; server-side generation; browser-local drafts. No ReelReady account or sign-in; explicit social authorization at publishing. User prioritizes a simple, reviewable first version.
+Implementation choice under the user's instruction to build from scratch: React with the Sites Vinext starter; server-side generation; Supabase Postgres drafts and private resumable video storage, with browser caching. No ReelReady account or sign-in; explicit social authorization at publishing. User prioritizes a simple, reviewable first version.
 
 ## Users
 
@@ -24,7 +24,7 @@ Installed Wispr Flow dictates into ordinary editable fields. Desktop Command Mod
 
 ## Capabilities and Constraints
 
-Before recording: hook, outline, shot checklist. After recording: Instagram caption/hashtags, Shorts title/description, X post. Language and script separate. Optional caption examples and brand details. Editable results, copy, character counts, validation, loading, retry and browser-local persistence. No ReelReady login. Each visitor must explicitly connect their own social accounts through Upload-Post before publishing. Keep planning, video and publishing data together. No fabricated analytics or publishing-success claims. Server secrets only. No invented claims. English, Telugu and Hindi first.
+Before recording: hook, outline, shot checklist. After recording: Instagram caption/hashtags, Shorts title/description, X post. Language and script separate. Optional caption examples and brand details. Editable results, copy, character counts, validation, loading, retry and private cloud persistence tied to an anonymous browser session. No ReelReady login. Each visitor must explicitly connect their own social accounts through Upload-Post before publishing. Keep planning, video and publishing data together. No fabricated analytics or publishing-success claims. Server secrets only. No invented claims. English, Telugu and Hindi first. No app-imposed video file-size cap; provider/project and destination limits remain.
 
 ## Brand Commitments
 
