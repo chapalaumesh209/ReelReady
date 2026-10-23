@@ -1388,3 +1388,31 @@ footer {
 .resize-none {
   resize: none;
 }
+
+.native-file-input {
+  width: min(100%, 390px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px;
+  font-size: 13px;
+  background: white;
+  cursor: pointer;
+}
+.native-file-input::file-selector-button {
+  background: var(--accent);
+  color: white;
+  border: 0;
+  border-radius: 7px;
+  padding: 11px 15px;
+  margin-right: 12px;
+  min-height: 44px;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+.native-file-input::file-selector-button:hover {
+  background: var(--accent-hover);
+}
+.upload-zone > .field-label {
+  margin: 0;
+}

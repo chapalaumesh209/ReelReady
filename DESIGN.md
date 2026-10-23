@@ -27,3 +27,5 @@ Native select ownership for operating-system keyboard/mobile behavior; labelled 
 ## Browser surfaces
 
 Visible focus; custom selection/caret/scrollbars; themed color-scheme light; no hidden scrollbars. Native select popup accepted.
+
+Video selection uses a visible native file input styled through ::file-selector-button. Never replace it with a hidden input and a synthetic click. A chooser attempt reveals drag/drop and external-browser guidance; metadata checking is cancellable and bounded.

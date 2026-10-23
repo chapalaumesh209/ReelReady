@@ -304,8 +304,42 @@ test("signed publishing upload streams exact video and captions, then tracks the
   }
 });
 
-test('social service failure still establishes the anonymous session needed for AI work',async()=>{
- const {GET}=await import('../app/api/connections/route');const old=globalThis.fetch;process.env.UPLOAD_POST_API_KEY='private-test-key';
- globalThis.fetch=async()=>new Response('Unavailable',{status:503});
- try{const response=await GET(new Request('https://reelready.test/api/connections'));assert.equal(response.status,502);assert.match(response.headers.get('set-cookie')||'',/rr_session=.*HttpOnly/);}finally{globalThis.fetch=old;delete process.env.UPLOAD_POST_API_KEY;}
+test("social service failure still establishes the anonymous session needed for AI work", async () => {
+  const { GET } = await import("../app/api/connections/route");
+  const old = globalThis.fetch;
+  process.env.UPLOAD_POST_API_KEY = "private-test-key";
+  globalThis.fetch = async () => new Response("Unavailable", { status: 503 });
+  try {
+    const response = await GET(
+      new Request("https://reelready.test/api/connections"),
+    );
+    assert.equal(response.status, 502);
+    assert.match(
+      response.headers.get("set-cookie") || "",
+      /rr_session=.*HttpOnly/,
+    );
+  } finally {
+    globalThis.fetch = old;
+    delete process.env.UPLOAD_POST_API_KEY;
+  }
+});
+
+test("video selection accepts valid filename MIME fallbacks and retains unsupported types for rejection", async () => {
+  const { normalizeVideo } = await import("../lib/browser-media");
+  const bytes = new Uint8Array(32);
+  const mp4 = normalizeVideo(new File([bytes], "phone.mp4", { type: "" }));
+  assert.equal(mp4.type, "video/mp4");
+  assert.equal(mp4.size, 32);
+  assert.equal(
+    normalizeVideo(
+      new File([bytes], "phone.mov", { type: "application/octet-stream" }),
+    ).type,
+    "video/quicktime",
+  );
+  assert.equal(
+    normalizeVideo(
+      new File([bytes], "unsafe.exe", { type: "application/octet-stream" }),
+    ).type,
+    "application/octet-stream",
+  );
 });

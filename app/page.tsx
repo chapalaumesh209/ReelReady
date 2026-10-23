@@ -43,6 +43,7 @@ import {
   loadMedia,
   storeMedia,
   metadata,
+  normalizeVideo,
   exportDub,
 } from "@/lib/browser-media";
 type Details = {
@@ -158,10 +159,10 @@ export default function Home() {
     [revision, setRevision] = useState(""),
     [help, setHelp] = useState(false),
     [storageWarning, setStorageWarning] = useState(false),
-    [newConfirm, setNewConfirm] = useState(false);
+    [newConfirm, setNewConfirm] = useState(false),
+    [pickerAttempted, setPickerAttempted] = useState(false);
   const controller = useRef<AbortController | null>(null),
     operation = useRef(false),
-    inputRef = useRef<HTMLInputElement>(null),
     headingRef = useRef<HTMLHeadingElement>(null);
   const patch = (values: Partial<Draft>) =>
     setDraft((d) => ({ ...d, ...values }));
@@ -387,14 +388,15 @@ export default function Home() {
       );
     }
   }
-  async function acceptVideo(file: File) {
+  async function acceptVideo(selectedFile: File) {
     if (busy) return;
-    void run("Checking your recording…", async () => {
+    void run("Checking your recording…", async (signal) => {
+      const file = normalizeVideo(selectedFile);
       if (!["video/mp4", "video/quicktime", "video/webm"].includes(file.type))
         throw new Error("Choose an MP4, MOV or WebM video.");
       if (file.size > MAX_VIDEO_BYTES)
         throw new Error("Keep the video under 80 MB for this version.");
-      const meta = await metadata(file);
+      const meta = await metadata(file, signal);
       if (meta.duration > 180 || meta.duration < 1)
         throw new Error("Choose a reel between 1 second and 3 minutes long.");
       if (draft.token) void removeRemote(draft.token);
@@ -864,7 +866,10 @@ export default function Home() {
             </p>
           )}
         </div>
-        <fieldset className="flow-fields" disabled={!ready || !connectionLoaded || !!busy}>
+        <fieldset
+          className="flow-fields"
+          disabled={!ready || !connectionLoaded || !!busy}
+        >
           <legend className="sr-only">Create your reel</legend>
           {draft.step === 0 && (
             <section className="workspace-panel">
@@ -1229,24 +1234,47 @@ export default function Home() {
                 <p>
                   Drop a video, paste a copied video file, or choose one below.
                 </p>
+                <label className="field-label" htmlFor="recording-file">
+                  {original ? "Replace recording" : "Upload video"}
+                </label>
                 <input
-                  ref={inputRef}
-                  className="sr-only"
+                  id="recording-file"
+                  className="native-file-input"
                   type="file"
                   aria-label="Choose recording"
-                  accept="video/mp4,video/quicktime,video/webm"
+                  aria-describedby="upload-file-help"
+                  accept=".mp4,.m4v,.mov,.webm,video/mp4,video/quicktime,video/webm"
+                  onClick={(e) => {
+                    e.currentTarget.value = "";
+                    setPickerAttempted(true);
+                  }}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
-                    if (f) void acceptVideo(f);
-                    e.target.value = "";
+                    if (f) {
+                      setPickerAttempted(false);
+                      void acceptVideo(f);
+                    }
                   }}
                 />
-                <button
-                  className="secondary"
-                  onClick={() => inputRef.current?.click()}
+                <p
+                  id="upload-file-help"
+                  className="hint"
+                  role={pickerAttempted ? "status" : undefined}
                 >
-                  {original ? "Replace recording" : "Upload video"}
-                </button>
+                  {pickerAttempted
+                    ? "If no file picker appears in this browser, drag your video into this area or open this page in Chrome or Safari."
+                    : "Choose a video file from your device."}
+                </p>
+                {pickerAttempted && (
+                  <button
+                    className="quiet"
+                    type="button"
+                    onClick={() => void copy(location.href)}
+                  >
+                    <Copy size={14} />
+                    Copy site link
+                  </button>
+                )}
                 <span className="hint">
                   MP4, MOV or WebM · up to 80 MB · up to 3 minutes
                 </span>

@@ -98,24 +98,40 @@ async function toRecording(page: Page) {
 }
 async function uploadRecording(page: Page) {
   const bytes = await fixture(page);
-  await page.getByLabel("Choose recording").setInputFiles({
+  const picker = page.waitForEvent("filechooser");
+  await page.getByLabel("Choose recording").click();
+  await expect(
+    page.getByText("If no file picker appears", { exact: false }),
+  ).toBeVisible();
+  await (
+    await picker
+  ).setFiles({
     name: "breakfast.webm",
     mimeType: "video/webm",
     buffer: Buffer.from(bytes),
   });
   await expect(page.getByText("Recording added.")).toBeVisible();
+  expect(await page.getByLabel("Choose recording").evaluate((input:HTMLInputElement)=>input.files?.[0]?.name)).toBe("breakfast.webm");
 }
 test("desktop: connected flow, local video, review, real WASM export, captions and schedule receipt", async ({
   page,
 }) => {
   test.setTimeout(180000);
-  const browserErrors:string[]=[];
-  page.on("console",message=>{if(message.type()==="error")browserErrors.push(message.text());});
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
   await page.setViewportSize({ width: 1440, height: 1050 });
   await setup(page);
   await page.screenshot({ path: "artifacts/flow-desktop.png", fullPage: true });
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await toRecording(page);
+  await page.screenshot({path:'artifacts/upload-desktop.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:'artifacts/upload-mobile.png',fullPage:true});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
+  await page.setViewportSize({width:1440,height:1050});
   await uploadRecording(page);
   await page.getByRole("button", { name: "Review my recording" }).click();
   await expect(page.getByLabel("English voiceover script")).toHaveValue(

@@ -34,42 +34,100 @@ export async function loadMedia(key: string): Promise<Blob | null> {
     db.close();
   }
 }
+/** Browser/OS file pickers sometimes omit MIME types or return an M4V alias. */
+export function normalizeVideo(file: File): File {
+  const raw = file.type.toLowerCase().split(";")[0];
+  const inferred = /\.(mp4|m4v)$/i.test(file.name)
+    ? "video/mp4"
+    : /\.mov$/i.test(file.name)
+      ? "video/quicktime"
+      : /\.webm$/i.test(file.name)
+        ? "video/webm"
+        : "";
+  const mime = ["video/mp4", "video/quicktime", "video/webm"].includes(raw)
+    ? raw
+    : ["", "application/octet-stream", "video/x-m4v", "video/mov"].includes(raw)
+      ? inferred
+      : raw;
+  return mime && mime !== file.type
+    ? new File([file], file.name, {
+        type: mime,
+        lastModified: file.lastModified,
+      })
+    : file;
+}
 export function metadata(
   blob: Blob,
+  signal?: AbortSignal,
 ): Promise<{ duration: number; width: number; height: number }> {
   return new Promise((resolve, reject) => {
-    const v = document.createElement("video"),
+    const video = document.createElement("video"),
       url = URL.createObjectURL(blob);
-    v.preload = "metadata";
+    let settled = false;
     const clean = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
+      video.onloadedmetadata = null;
+      video.ondurationchange = null;
+      video.ontimeupdate = null;
+      video.onerror = null;
+      video.removeAttribute("src");
+      video.load();
       URL.revokeObjectURL(url);
-      v.removeAttribute("src");
-      v.load();
     };
-    v.onloadedmetadata = () => {
-      const data = {
-        duration: v.duration,
-        width: v.videoWidth,
-        height: v.videoHeight,
-      };
+    const fail = (message: string) => {
+      if (settled) return;
+      settled = true;
       clean();
-      if (!Number.isFinite(data.duration) || !data.width)
-        reject(
-          new Error(
-            "This video could not be read. Export it as MP4 and try again.",
-          ),
-        );
-      else resolve(data);
+      reject(new Error(message));
     };
-    v.onerror = () => {
+    const cancel = () => {
+      if (settled) return;
+      settled = true;
       clean();
-      reject(
-        new Error(
-          "This browser cannot read the video. Export it as MP4 and try again.",
+      reject(new DOMException("Cancelled", "AbortError"));
+    };
+    const timer = setTimeout(
+      () =>
+        fail(
+          "This video took too long to open. Try a local file or export it as an H.264 MP4, then choose it again.",
         ),
-      );
+      15000,
+    );
+    const finish = () => {
+      if (
+        settled ||
+        !Number.isFinite(video.duration) ||
+        video.duration <= 0 ||
+        !video.videoWidth
+      )
+        return;
+      const data = {
+        duration: video.duration,
+        width: video.videoWidth,
+        height: video.videoHeight,
+      };
+      settled = true;
+      clean();
+      resolve(data);
     };
-    v.src = url;
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      finish();
+      if (!settled && video.duration === Infinity) video.currentTime = 1e10;
+    };
+    video.ondurationchange = finish;
+    video.ontimeupdate = finish;
+    video.onerror = () =>
+      fail(
+        "This browser cannot open the recording. Try Chrome or Safari, or export the video as an H.264 MP4.",
+      );
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) {
+      cancel();
+      return;
+    }
+    video.src = url;
   });
 }
 export async function exportDub(
