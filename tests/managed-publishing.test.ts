@@ -84,6 +84,7 @@ before(async () => {
   process.env.WORKER_POOL = `managed-test-${crypto.randomUUID()}`;
   process.env.PUBLISH_PROVIDER = "uploadpost";
   process.env.PUBLISH_EXECUTOR = "n8n";
+  process.env.PUBLISH_MEDIA_TRANSPORT = "binary";
   process.env.UPLOAD_POST_API_KEY = "test-provider-key-not-real";
   process.env.N8N_PUBLISHER_SECRET =
     "test-bridge-secret-not-real-000000000000000";

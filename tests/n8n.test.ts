@@ -9,6 +9,18 @@ import {
 } from "../lib/server/automation/config";
 import { publishingExecutorStatus } from "../lib/server/automation/status";
 import { workerStatus } from "../lib/server/media/status";
+import {
+  providerWebhookBase,
+  providerWebhook,
+  binaryMediaTransfer,
+} from "../lib/server/provider/config";
+import {
+  hostedWorkflows,
+  hostedCoordinator,
+} from "../lib/server/automation/hosted-workflows";
+import { coordinatorTick } from "../lib/server/automation/coordinator";
+import { automationCallback } from "../lib/server/automation/callback";
+import { publisherCoordinatorPrefix } from "../lib/server/automation/status";
 import { storageAdmin } from "../lib/supabase";
 const secret = "n8n-test-only-not-a-real-secret-0000000000";
 const headers = { Authorization: `Bearer ${secret}` };
@@ -365,5 +377,223 @@ test("private media bridge never leaks upstream storage addresses or tickets", a
     assert.doesNotMatch(await r.text(), /private-storage|secret-ticket/);
   } finally {
     await f.close();
+  }
+});
+
+test("hosted webhook configuration normalizes production endpoints and rejects test or unsafe bases", () => {
+  assert.equal(
+    providerWebhookBase(
+      "https://umeshchapala-n8n.hf.space/webhook/reelready-provider-status",
+    ),
+    "https://umeshchapala-n8n.hf.space/webhook",
+  );
+  assert.equal(
+    providerWebhookBase("https://umeshchapala-n8n.hf.space/"),
+    "https://umeshchapala-n8n.hf.space/webhook",
+  );
+  for (const input of [
+    "https://n8n.example.com/webhook-test/reelready-provider-status",
+    "http://remote.example.com/webhook",
+    "https://user:password@n8n.example.com/webhook",
+    "https://n8n.example.com/webhook?key=secret",
+    "https://n8n.example.com/workflow/123",
+  ])
+    assert.throws(() => providerWebhookBase(input));
+  const saved = { ...process.env };
+  try {
+    process.env.N8N_PROVIDER_WEBHOOK_BASE =
+      "https://umeshchapala-n8n.hf.space/webhook/reelready-provider-status";
+    assert.equal(
+      providerWebhook("publish"),
+      "https://umeshchapala-n8n.hf.space/webhook/reelready-provider-publish",
+    );
+    process.env.VERCEL = "1";
+    assert.throws(() => providerWebhookBase("http://127.0.0.1:5678/webhook"));
+    process.env.PUBLISH_PROVIDER = "uploadpost";
+    process.env.PUBLISH_EXECUTOR = "n8n";
+    delete process.env.PUBLISH_MEDIA_TRANSPORT;
+    assert.equal(binaryMediaTransfer(), false);
+    process.env.N8N_PROVIDER_WEBHOOK_BASE = "http://127.0.0.1:5678/webhook";
+    assert.equal(binaryMediaTransfer(), true);
+    process.env.PUBLISH_MEDIA_TRANSPORT = "invalid";
+    assert.throws(binaryMediaTransfer);
+  } finally {
+    for (const key of Object.keys(process.env))
+      if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+  }
+});
+
+test("hosted workflows call authenticated Vercel routes and send signed media URLs outside Vercel", () => {
+  const flows = hostedWorkflows("https://reelready-v1.vercel.app/");
+  assert.equal(flows.length, 4);
+  const publish = flows.find((f) => f.id === "ReelReadyProviderPublisherV1")!;
+  const connect = flows.find((f) => f.id === "ReelReadyProviderConnectV1")!;
+  assert.equal(
+    publish.nodes.find((n) => n.id === "claim")!.parameters.url,
+    "https://reelready-v1.vercel.app/api/automation/authorize",
+  );
+  assert.equal(
+    connect.nodes.find((n) => n.id === "claim")!.parameters.url,
+    "https://reelready-v1.vercel.app/api/automation/connect-authorize",
+  );
+  assert.equal(
+    publish.nodes.some((n) => n.id === "download-private-video"),
+    false,
+  );
+  const upload = publish.nodes.find((n) => n.id === "publish")!;
+  const fields = (
+    upload.parameters.bodyParameters as {
+      parameters: Array<Record<string, unknown>>;
+    }
+  ).parameters;
+  assert.deepEqual(
+    fields.find((f) => f.name === "video"),
+    { name: "video", value: "={{ $json.videoUrl }}" },
+  );
+  for (const flow of flows) {
+    assert.equal(
+      flow.nodes.find((n) => n.type === "n8n-nodes-base.webhook")!.parameters
+        .authentication,
+      "jwtAuth",
+    );
+    assert.equal(flow.settings.saveDataSuccessExecution, "none");
+    assert.doesNotMatch(
+      JSON.stringify(flow),
+      /host\.docker\.internal|localhost|127\.0\.0\.1|media-download|webhook-test/,
+    );
+  }
+  assert.throws(() => hostedWorkflows("http://127.0.0.1:3000"));
+  assert.throws(() => hostedWorkflows("https://reelready.example.com/subpath"));
+  assert.equal(hostedWorkflows("", ["health", "status"]).length, 2);
+});
+
+test("Vercel machine callbacks reject unauthenticated, invalid and oversized requests before any authorization", async () => {
+  const saved = process.env.N8N_PUBLISHER_SECRET;
+  process.env.N8N_PUBLISHER_SECRET = secret;
+  let calls = 0;
+  const handle = async (input: unknown) => {
+    calls++;
+    assert.deepEqual(input, { connectionToken: "owned-grant" });
+    return { approved: true };
+  };
+  const request = (body: string, authorized = false) =>
+    new Request(
+      "https://reelready.example.com/api/automation/connect-authorize",
+      { method: "POST", headers: authorized ? headers : {}, body },
+    );
+  try {
+    assert.equal((await automationCallback(request("{}"), handle)).status, 401);
+    assert.equal(
+      (await automationCallback(request("x".repeat(4097), true), handle))
+        .status,
+      413,
+    );
+    assert.equal(
+      (await automationCallback(request("invalid", true), handle)).status,
+      400,
+    );
+    assert.equal(calls, 0);
+    const response = await automationCallback(
+      request(JSON.stringify({ connectionToken: "owned-grant" }), true),
+      handle,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(calls, 1);
+    const failed = await automationCallback(request("{}", true), async () => {
+      throw new Error("private-key https://internal-storage/token");
+    });
+    assert.equal(failed.status, 502);
+    assert.doesNotMatch(await failed.text(), /private-key|internal-storage/);
+  } finally {
+    if (saved === undefined) delete process.env.N8N_PUBLISHER_SECRET;
+    else process.env.N8N_PUBLISHER_SECRET = saved;
+  }
+});
+
+test("a local n8n heartbeat cannot make a different hosted coordinator appear online", async () => {
+  const saved = { ...process.env },
+    admin = storageAdmin(),
+    pool = `hosted-heartbeat-${crypto.randomUUID()}`;
+  try {
+    process.env.PUBLISH_PROVIDER = "uploadpost";
+    process.env.PUBLISH_EXECUTOR = "n8n";
+    process.env.WORKER_POOL = pool;
+    process.env.N8N_PROVIDER_WEBHOOK_BASE = "http://127.0.0.1:5678/webhook";
+    const localId = publisherCoordinatorPrefix() + crypto.randomUUID();
+    await admin
+      .from("reelready_workers")
+      .insert({ id: localId, pool, heartbeat: new Date().toISOString() });
+    assert.equal((await publishingExecutorStatus()).status, "online");
+    process.env.N8N_PROVIDER_WEBHOOK_BASE =
+      "https://umeshchapala-n8n.hf.space/webhook";
+    assert.equal((await publishingExecutorStatus()).status, "offline");
+    await admin.from("reelready_workers").insert({
+      id: publisherCoordinatorPrefix() + crypto.randomUUID(),
+      pool,
+      heartbeat: new Date().toISOString(),
+    });
+    assert.equal((await publishingExecutorStatus()).status, "online");
+  } finally {
+    await admin.from("reelready_workers").delete().eq("pool", pool);
+    for (const key of Object.keys(process.env))
+      if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+  }
+});
+
+test("the hosted coordinator acknowledges before running a job and never publishes in demo mode", async () => {
+  const saved = { ...process.env },
+    admin = storageAdmin(),
+    pool = `coordinator-${crypto.randomUUID()}`;
+  try {
+    process.env.PUBLISH_PROVIDER = "uploadpost";
+    process.env.PUBLISH_EXECUTOR = "n8n";
+    process.env.PUBLISH_MEDIA_TRANSPORT = "url";
+    process.env.N8N_PROVIDER_WEBHOOK_BASE =
+      "https://umeshchapala-n8n.hf.space/webhook";
+    process.env.WORKER_POOL = pool;
+    process.env.DEMO_MODE = "true";
+    const pending: Array<() => Promise<void>> = [];
+    let runs = 0;
+    const schedule = (fn: () => Promise<void>) => {
+      pending.push(fn);
+    };
+    const run = async (id: string) => {
+      assert.match(id, /^vercel-/);
+      runs++;
+      return false;
+    };
+    const demo = await coordinatorTick({}, schedule, run);
+    assert.deepEqual(demo, { accepted: false, demo: true });
+    assert.equal(pending.length, 0);
+    assert.equal(runs, 0);
+    process.env.DEMO_MODE = "false";
+    const live = await coordinatorTick({}, schedule, run);
+    assert.deepEqual(live, { accepted: true, demo: false });
+    assert.equal(runs, 0);
+    assert.equal(pending.length, 1);
+    await pending[0]();
+    assert.equal(runs, 1);
+    assert.equal((await publishingExecutorStatus()).status, "online");
+    assert.equal((await workerStatus()).status, "offline");
+    await assert.rejects(() =>
+      coordinatorTick({ postId: crypto.randomUUID() }, schedule, run),
+    );
+    assert.equal(pending.length, 1);
+    const flow = hostedCoordinator("https://reelready-v1.vercel.app/");
+    const tick = flow.nodes.find((n) => n.id === "tick")!;
+    assert.equal(
+      tick.parameters.url,
+      "https://reelready-v1.vercel.app/api/automation/tick",
+    );
+    assert.equal(tick.retryOnFail, false);
+    assert.equal(tick.parameters.jsonBody, "{}");
+  } finally {
+    await admin.from("reelready_workers").delete().eq("pool", pool);
+    for (const key of Object.keys(process.env))
+      if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
   }
 });

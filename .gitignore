@@ -65,3 +65,6 @@ yarn-error.log*
 
 # Isolated production validation build
 /.next-flow-build/
+
+# Hosted n8n operation state and private workflow backups
+/.n8n-hosted/

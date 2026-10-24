@@ -9,8 +9,13 @@ const { demoMode } = await import("../lib/server/config");
 const { providerCapacity } = await import("../lib/server/provider-budget");
 const { publicMediaURL } = await import("../lib/server/publishing/preflight");
 const { socialConfiguration } = await import("../lib/server/social/config");
-const { publishingProvider, providerKey, realPublishingConfigured } =
-  await import("../lib/server/provider/config");
+const {
+  publishingProvider,
+  providerKey,
+  realPublishingConfigured,
+  providerWebhookBase,
+  binaryMediaTransfer,
+} = await import("../lib/server/provider/config");
 const { publishExecutor, publisherBridgeConfiguration } = await import(
   "../lib/server/automation/config"
 );
@@ -60,6 +65,25 @@ if (!local && (!process.env.APP_URL || !publicMediaURL(process.env.APP_URL)))
   issues.push("Hosted configuration requires a public HTTPS APP_URL.");
 if (!local && !publicMediaURL(storage.url))
   issues.push("Hosted storage requires a public HTTPS Supabase URL.");
+if (publishingProvider() === "uploadpost") {
+  try {
+    const base = providerWebhookBase();
+    if (!local && !publicMediaURL(base))
+      issues.push(
+        "Hosted publishing requires the public HTTPS n8n production webhook base.",
+      );
+    if (!local && binaryMediaTransfer())
+      issues.push(
+        "Vercel callbacks require PUBLISH_MEDIA_TRANSPORT=url and hosted Supabase Storage. Do not send large videos through Vercel functions.",
+      );
+  } catch (e) {
+    issues.push(
+      e instanceof Error
+        ? e.message
+        : "Hosted webhook configuration is invalid.",
+    );
+  }
+}
 if (!demo) {
   if (!realPublishingConfigured())
     issues.push(

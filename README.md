@@ -1,5 +1,7 @@
 # ReelReady
 
+**Hosted n8n + Vercel:** see [the production integration guide](docs/HOSTED-N8N-VERCEL.md) for the Hugging Face Space, authenticated Vercel callbacks and hosted coordinator.
+
 **Current publishing path:** ReelReady → authenticated n8n webhooks → managed publishing provider. See [managed n8n setup](docs/MANAGED-N8N-PUBLISHING.md). The direct-platform implementation described below is retained for explicit native mode and historical jobs.
 
 Two main n8n workflows are connected to the app: **connect creator accounts** and **publish the approved video/captions**. See [the two-flow guide](docs/N8N-TWO-FLOWS.md). Test the actual account workflow safely with `npm run verify:n8n:connect`.

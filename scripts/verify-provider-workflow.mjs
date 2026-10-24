@@ -28,11 +28,17 @@ const bridgeSecret = randomBytes(32).toString("base64url"),
   providerSecret = "fixture-only-not-an-api-key";
 let consumed = false,
   uploads = 0;
+const hosted = process.argv.includes("--hosted");
 const videoBytes = readFileSync("public/samples/reelready-demo.mp4");
 const envelope = {
   postId: randomUUID(),
   profileUsername: "verification-profile",
-  mediaTicket: "fixture-private-media-ticket",
+  ...(hosted
+    ? {
+        videoUrl:
+          "https://media.example.com/signed-owned-video.mp4?fixture=yes",
+      }
+    : { mediaTicket: "fixture-private-media-ticket" }),
   platforms: ["youtube", "instagram", "x"],
   title: "Fixture title",
   youtubeDescription: "YouTube only description",
@@ -71,11 +77,13 @@ const server = createServer(async (req, res) => {
       return;
     }
     assert.equal(req.url, "/upload");
-    assert.ok(
-      raw.includes(videoBytes),
-      "Publisher must receive the actual video bytes",
-    );
-    assert.match(body, /name="video"; filename="[^"]+"/);
+    if (!hosted) {
+      assert.ok(
+        raw.includes(videoBytes),
+        "Publisher must receive the actual video bytes",
+      );
+      assert.match(body, /name="video"; filename="[^"]+"/);
+    }
     assert.equal(req.headers.authorization, `Apikey ${providerSecret}`);
     assert.match(String(req.headers["content-type"]), /^multipart\/form-data;/);
     const field = (name) =>
@@ -84,6 +92,7 @@ const server = createServer(async (req, res) => {
           `name="${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\r\\n\\r\\n([^\\r]*)`,
         ),
       )?.[1];
+    if (hosted) assert.equal(field("video"), envelope.videoUrl);
     assert.equal(field("user"), envelope.profileUsername);
     assert.equal(field("youtube_description"), envelope.youtubeDescription);
     assert.equal(field("instagram_title"), envelope.instagramCaption);
@@ -112,7 +121,12 @@ const server = createServer(async (req, res) => {
 server.listen(3020, "0.0.0.0");
 await once(server, "listening");
 const flow = JSON.parse(
-  readFileSync("automation/n8n/provider-publish-workflow.json", "utf8"),
+  readFileSync(
+    hosted
+      ? ".n8n-hosted/ReelReadyProviderPublisherV1.json"
+      : "automation/n8n/provider-publish-workflow.json",
+    "utf8",
+  ),
 );
 flow.id = "ReelReadyVerificationV1";
 flow.versionId = randomUUID();
@@ -130,11 +144,13 @@ flow.nodes[1].credentials.httpHeaderAuth = {
 const download = flow.nodes.find(
   (node) => node.id === "download-private-video",
 );
-download.parameters.url = "http://host.docker.internal:3020/media-download";
-download.credentials.httpHeaderAuth = {
-  id: "ReelReadyVerificationAuth",
-  name: "Verification auth",
-};
+if (download) {
+  download.parameters.url = "http://host.docker.internal:3020/media-download";
+  download.credentials.httpHeaderAuth = {
+    id: "ReelReadyVerificationAuth",
+    name: "Verification auth",
+  };
+}
 flow.nodes.find(
   (node) => node.name === "Publish video to selected destinations",
 ).parameters.url = "http://host.docker.internal:3020/upload";

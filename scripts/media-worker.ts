@@ -1,5 +1,8 @@
 import nextEnv from "@next/env";
 nextEnv.loadEnvConfig(process.cwd(), true);
+const { publisherCoordinatorPrefix } = await import(
+  "../lib/server/automation/status"
+);
 const { workerPool } = await import("../lib/server/hardening");
 const { storageAdmin } = await import("../lib/supabase");
 const { workerOnce, checkBinaries } = await import(
@@ -25,7 +28,7 @@ const { callPublishingWorkflow } = await import(
 );
 await checkBinaries();
 const id = `worker-${crypto.randomUUID()}`;
-const coordinatorId = `n8n-${id}`;
+const coordinatorId = `${publisherCoordinatorPrefix()}${id}`;
 const executor = publishExecutor();
 const provider = publishingProvider();
 const admin = storageAdmin();

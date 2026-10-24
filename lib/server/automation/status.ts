@@ -1,7 +1,18 @@
+import { createHash } from "node:crypto";
+import { publishingProvider, providerWebhookBase } from "../provider/config";
 import { storageAdmin } from "../../supabase";
 import { positiveEnv, workerPool } from "../hardening";
 import { workerStatus } from "../media/status";
 import { publishExecutor } from "./config";
+
+export function publisherCoordinatorPrefix() {
+  if (publishingProvider() !== "uploadpost") return "n8n-";
+  const fingerprint = createHash("sha256")
+    .update(providerWebhookBase())
+    .digest("hex")
+    .slice(0, 12);
+  return `n8n-${fingerprint}-`;
+}
 
 export async function publishingExecutorStatus() {
   const executor = publishExecutor();
@@ -12,7 +23,7 @@ export async function publishingExecutorStatus() {
       .from("reelready_workers")
       .select("id")
       .eq("pool", workerPool())
-      .like("id", "n8n-%")
+      .like("id", `${publisherCoordinatorPrefix()}%`)
       .gt(
         "heartbeat",
         new Date(

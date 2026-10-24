@@ -28,7 +28,8 @@
     "n8n:start": "docker compose -f automation/n8n/compose.yaml up -d",
     "n8n:stop": "docker compose -f automation/n8n/compose.yaml stop",
     "verify:n8n": "node scripts/verify-provider-workflow.mjs",
-    "verify:n8n:connect": "node scripts/verify-connect-workflow.mjs"
+    "verify:n8n:connect": "node scripts/verify-connect-workflow.mjs",
+    "n8n:setup:hosted": "node --import tsx scripts/setup-hosted-n8n.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
