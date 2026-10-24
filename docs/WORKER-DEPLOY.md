@@ -1,6 +1,6 @@
 # Media worker on a long-lived host
 
-The current managed-provider mode uses authenticated n8n webhooks for publishing; see [MANAGED-N8N-PUBLISHING.md](MANAGED-N8N-PUBLISHING.md). In that mode the same worker dispatches approved due jobs to n8n and serves the private one-use authorization and ticket-scoped media-stream endpoints. n8n must reach this private listener to read the approved video; no storage credentials leave the worker. The native scheduler-only option below is retained for explicit native mode.
+Production Vercel deployments use the authenticated hosted n8n workflows and Vercel callbacks described in [HOSTED-N8N-VERCEL.md](HOSTED-N8N-VERCEL.md). The dedicated media worker handles the private FFmpeg queue only; n8n does not need to reach its listener or stream videos through it. Local development can retain the private bridge described in [MANAGED-N8N-PUBLISHING.md](MANAGED-N8N-PUBLISHING.md). The native publishing loop below applies only to an explicitly selected native executor.
 
 No worker is deployed by this change. Vercel serves the web app; run the worker separately on an always-on container host with outbound HTTPS, Node 22, FFmpeg/FFprobe and at least 1 GB writable temporary disk. The original-audio workflow works without it.
 
