@@ -44,9 +44,24 @@ yarn-error.log*
 # OS metadata
 .DS_Store
 
-# Review artifacts
+# Review artifacts and private runtime diagnostics
+/artifacts/
 /test-results/
 /playwright-report/
 /artifacts/*.png
 /artifacts/*.json
 !.env.example
+/artifacts/*.wav
+/artifacts/*.flac
+/artifacts/*.log
+/artifacts/*.mp4
+
+/.next-offline/
+
+/.next-test-studio/
+
+# Local n8n bootstrap credentials; never commit.
+/.n8n-local/
+
+# Isolated production validation build
+/.next-flow-build/

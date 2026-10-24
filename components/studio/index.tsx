@@ -1,7 +1,13 @@
 "use client";
 import { useEffect, useRef } from "react";
-import { Copy } from "lucide-react";
-import { characterCount, hashtagCount, xCount, type Kit } from "@/lib/content";
+import { Copy, RefreshCw } from "lucide-react";
+import {
+  characterCount,
+  hashtagCount,
+  xCount,
+  hasLinks,
+  type Kit,
+} from "@/lib/content";
 export function Logo() {
   return (
     <svg
@@ -25,8 +31,9 @@ export function AutoTextarea({
   onChange,
   rows = 3,
   placeholder = "",
-  maxLength = 6000,
+  maxLength = 4000,
   onSubmit,
+  error = "",
 }: {
   id: string;
   label?: string;
@@ -36,6 +43,7 @@ export function AutoTextarea({
   placeholder?: string;
   maxLength?: number;
   onSubmit?: () => void;
+  error?: string;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -46,39 +54,53 @@ export function AutoTextarea({
     }
   }, [value]);
   return (
-    <textarea
-      ref={ref}
-      className="resize-none"
-      id={id}
-      aria-label={label}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      rows={rows}
-      onKeyDown={(e) => {
-        if (
-          onSubmit &&
-          e.key === "Enter" &&
-          !e.shiftKey &&
-          !e.nativeEvent.isComposing &&
-          e.keyCode !== 229
-        ) {
-          e.preventDefault();
-          onSubmit();
-        }
-      }}
-      placeholder={placeholder}
-      maxLength={maxLength}
-    />
+    <>
+      <textarea
+        ref={ref}
+        className="resize-none"
+        id={id}
+        aria-label={label}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={rows}
+        onKeyDown={(e) => {
+          if (
+            onSubmit &&
+            e.key === "Enter" &&
+            !e.shiftKey &&
+            !e.nativeEvent.isComposing &&
+            e.keyCode !== 229
+          ) {
+            e.preventDefault();
+            onSubmit();
+          }
+        }}
+        placeholder={placeholder}
+        maxLength={maxLength}
+        aria-invalid={!!error}
+        aria-describedby={`${id}-voice-hint${error ? ` ${id}-error` : ""}`}
+      />
+      {error && (
+        <span className="field-error" id={`${id}-error`} role="alert">
+          {error}
+        </span>
+      )}
+      <span id={`${id}-voice-hint`} className="hint voice-hint">
+        Dictate with Wispr Flow: hold your key and speak.
+      </span>
+    </>
   );
 }
 export function OutputEditor({
   kit,
   onChange,
   onCopy,
+  onRewrite,
 }: {
   kit: Kit;
   onChange: (id: string, value: string) => void;
   onCopy: (text: string) => void;
+  onRewrite?: (id: string) => void;
 }) {
   return (
     <div className="output-list">
@@ -92,7 +114,7 @@ export function OutputEditor({
                 : o.id === "x"
                   ? 280
                   : 5000;
-        return (
+        const sheet = (
           <section
             className="output-sheet"
             key={o.id}
@@ -100,21 +122,41 @@ export function OutputEditor({
           >
             <div className="sheet-heading">
               <h3 id={`label-${o.id}`}>{o.title}</h3>
-              <button
-                type="button"
-                className="quiet"
-                onClick={() => onCopy(o.text)}
-                aria-label={`Copy ${o.title}`}
-              >
-                <Copy size={15} />
-                Copy
-              </button>
+              <div className="sheet-actions">
+                {onRewrite && (
+                  <button
+                    type="button"
+                    className="quiet"
+                    onClick={() => onRewrite(o.id)}
+                    aria-label={`Rewrite ${o.title}`}
+                  >
+                    <RefreshCw size={14} />
+                    Rewrite
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="quiet"
+                  onClick={() => onCopy(o.text)}
+                  aria-label={`Copy ${o.title}`}
+                >
+                  <Copy size={15} />
+                  Copy
+                </button>
+              </div>
             </div>
             <AutoTextarea
               id={`output-${o.id}`}
               label={o.title}
               value={o.text}
               onChange={(v) => onChange(o.id, v)}
+              error={
+                count > max
+                  ? `Shorten this to ${max.toLocaleString()} characters before publishing.`
+                  : o.id === "x" && hasLinks(o.text)
+                    ? "Remove links from the X post before publishing."
+                    : ""
+              }
               maxLength={10000}
             />
             <div className={`count ${count > max ? "invalid" : ""}`}>
@@ -127,7 +169,19 @@ export function OutputEditor({
             {o.warning && <p className="hint">{o.warning}</p>}
           </section>
         );
+        return o.id === "hook" ? (
+          <details className="hook-output" key={o.id}>
+            <summary>Opening hook</summary>
+            {sheet}
+          </details>
+        ) : (
+          sheet
+        );
       })}
     </div>
   );
+}
+
+export function SampleBadge() {
+  return <span className="sample-badge">Sample output</span>;
 }

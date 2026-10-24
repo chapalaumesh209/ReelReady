@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { takeProviderCall } from "./server/provider-budget";
 /** Server-only Gemini adapter. The browser only calls our same-origin route. */
 export class GenerationError extends Error {
   constructor(
@@ -8,9 +10,27 @@ export class GenerationError extends Error {
   }
 }
 export function generationConfiguration() {
+  const requested = process.env.LLM_PROVIDER || "gemini";
+  const provider =
+    requested === "demo" && process.env.GEMINI_API_KEY ? "gemini" : requested;
   return {
-    key: process.env.GEMINI_API_KEY,
-    model: process.env.GEMINI_MODEL || "gemini-3.1-flash-lite",
+    provider,
+    key:
+      provider === "demo"
+        ? ""
+        : process.env.LLM_API_KEY ||
+          (provider === "gemini"
+            ? process.env.GEMINI_API_KEY
+            : provider === "openai"
+              ? process.env.OPENAI_API_KEY
+              : process.env.ANTHROPIC_API_KEY),
+    model:
+      process.env.LLM_MODEL ||
+      (provider === "gemini"
+        ? process.env.GEMINI_MODEL || "gemini-3.1-flash-lite"
+        : provider === "openai"
+          ? "gpt-4.1-mini"
+          : "claude-sonnet-4-6"),
   };
 }
 export async function generateStructuredContent(options: {
@@ -18,9 +38,115 @@ export async function generateStructuredContent(options: {
   content: unknown;
   schema: Record<string, unknown>;
   signal: AbortSignal;
+  providerOverride?: "gemini";
   mediaParts?: Array<{ fileData: { fileUri: string; mimeType: string } }>;
 }): Promise<unknown> {
-  const { key, model } = generationConfiguration();
+  let { key, model, provider } = generationConfiguration();
+  const signal = AbortSignal.any([options.signal, AbortSignal.timeout(18000)]);
+  if (options.mediaParts?.length || options.providerOverride === "gemini") {
+    provider = "gemini";
+    key = process.env.GEMINI_API_KEY;
+    model = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
+  }
+  if (provider === "openai" || provider === "anthropic") {
+    if (!key)
+      throw new GenerationError(
+        "Live writing needs a server-side AI connection.",
+        503,
+      );
+    await takeProviderCall();
+    const response = await fetch(
+      provider === "openai"
+        ? "https://api.openai.com/v1/responses"
+        : "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        signal,
+        headers:
+          provider === "openai"
+            ? {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${key}`,
+              }
+            : {
+                "Content-Type": "application/json",
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+              },
+        body: JSON.stringify(
+          provider === "openai"
+            ? {
+                model,
+                instructions: options.instructions,
+                input: JSON.stringify(options.content),
+                text: {
+                  format: {
+                    type: "json_schema",
+                    name: "reelready",
+                    schema: options.schema,
+                    strict: true,
+                  },
+                },
+                max_output_tokens: 4000,
+              }
+            : {
+                model,
+                max_tokens: 4000,
+                system: options.instructions,
+                messages: [
+                  { role: "user", content: JSON.stringify(options.content) },
+                ],
+                tools: [
+                  {
+                    name: "reelready_result",
+                    description: "Return the requested structured result.",
+                    input_schema: options.schema,
+                  },
+                ],
+                tool_choice: { type: "tool", name: "reelready_result" },
+              },
+        ),
+      },
+    );
+    if (!response.ok)
+      throw new GenerationError(
+        "The writing service could not finish. Check its server connection or try again later.",
+        response.status === 429 ? 429 : 502,
+      );
+    const raw = z
+      .object({
+        content: z
+          .array(z.object({ type: z.string(), input: z.unknown().optional() }))
+          .optional(),
+        output: z
+          .array(
+            z.object({
+              content: z
+                .array(
+                  z.object({ type: z.string(), text: z.string().optional() }),
+                )
+                .optional(),
+            }),
+          )
+          .optional(),
+      })
+      .parse(await response.json());
+    if (provider === "anthropic") {
+      const result = raw.content?.find(
+        (c: { type: string }) => c.type === "tool_use",
+      );
+      if (result) return result.input;
+    } else {
+      const value = raw.output
+        ?.flatMap((o) => o.content || [])
+        .find((c: { type: string }) => c.type === "output_text")?.text;
+      if (value) return JSON.parse(value);
+    }
+    throw new GenerationError(
+      "The writing service returned an incomplete result.",
+      502,
+    );
+  }
   if (!key)
     throw new GenerationError(
       "Live generation is not connected yet. Your input is saved.",
@@ -31,12 +157,13 @@ export async function generateStructuredContent(options: {
       "The writing service needs its model configuration updated.",
       503,
     );
+  await takeProviderCall();
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: "POST",
       headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
-      signal: options.signal,
+      signal,
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: options.instructions }] },
         contents: [

@@ -1,3 +1,4 @@
+import { authContext } from "./supabase/server";
 import { z } from "zod";
 import { GenerationError } from "./generation";
 export const json = (body: unknown, status = 200, headers?: HeadersInit) =>
@@ -8,7 +9,11 @@ export const json = (body: unknown, status = 200, headers?: HeadersInit) =>
 export function sameOrigin(req: Request) {
   const origin = req.headers.get("origin");
   if (
-    (origin && origin !== new URL(req.url).origin) ||
+    (origin &&
+      origin !==
+        (process.env.APP_URL
+          ? new URL(process.env.APP_URL).origin
+          : new URL(req.url).origin)) ||
     req.headers.get("sec-fetch-site") === "cross-site"
   )
     throw new GenerationError(
@@ -16,7 +21,10 @@ export function sameOrigin(req: Request) {
       403,
     );
 }
-export async function body<T>(req: Request, schema: z.ZodType<T>): Promise<T> {
+export async function body<S extends z.ZodTypeAny>(
+  req: Request,
+  schema: S,
+): Promise<z.output<S>> {
   sameOrigin(req);
   if (!req.body)
     throw new GenerationError("The request is empty. Try again.", 400);
@@ -53,6 +61,14 @@ export async function body<T>(req: Request, schema: z.ZodType<T>): Promise<T> {
   }
 }
 export function failure(error: unknown) {
+  if (error instanceof z.ZodError)
+    return json(
+      {
+        error:
+          "Some details are missing or invalid. Review your input and try again.",
+      },
+      400,
+    );
   if (error instanceof GenerationError)
     return json({ error: error.message }, error.status);
   if (
@@ -85,7 +101,11 @@ function decode(value: string) {
   );
 }
 async function signingKey() {
-  const secret = process.env.SESSION_SECRET || process.env.GEMINI_API_KEY;
+  const secret =
+    process.env.SESSION_SECRET ||
+    process.env.GEMINI_API_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!secret)
     throw new GenerationError(
       "The server connection needs to be configured.",
@@ -148,31 +168,39 @@ export async function verify(
     );
   }
 }
+const authenticated = new WeakMap<
+  Request,
+  Promise<{ id: string; cookie: undefined }>
+>();
 export async function session(req: Request, create = false) {
   sameOrigin(req);
-  const token = req.headers
-    .get("cookie")
-    ?.split(";")
-    .map((c) => c.trim())
-    .find((c) => c.startsWith("rr_session="))
-    ?.slice(11);
-  if (token) {
-    try {
-      const data = await verify(token, "session");
-      if (typeof data.id === "string" && /^[a-f0-9-]{36}$/.test(data.id))
-        return { id: data.id, cookie: undefined };
-    } catch {}
+  let pending = authenticated.get(req);
+  if (!pending) {
+    pending = (async () => {
+      const { db } = authContext(req);
+      let { data, error } = await db.auth.getUser(
+        req.headers.get("authorization")?.replace(/^Bearer /i, ""),
+      );
+      if ((error || !data.user) && create) {
+        const signed = await db.auth.signInAnonymously();
+        if (signed.error || !signed.data.user)
+          throw new GenerationError(
+            "Development setup: enable anonymous sign-ins in Supabase Auth. Your local draft is preserved.",
+            503,
+          );
+        data = { user: signed.data.user };
+        error = null;
+      }
+      if (error || !data.user)
+        throw new GenerationError(
+          "Your private session is unavailable. Refresh to reconnect to Supabase.",
+          401,
+        );
+      return { id: data.user.id, cookie: undefined };
+    })();
+    authenticated.set(req, pending);
   }
-  if (!create)
-    throw new GenerationError(
-      "Your browser session expired. Refresh the page to continue.",
-      401,
-    );
-  const id = crypto.randomUUID();
-  return {
-    id,
-    cookie: `rr_session=${await sign({ id }, "session", 2592000)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${new URL(req.url).protocol === "https:" ? "; Secure" : ""}`,
-  };
+  return pending;
 }
 export async function capability(req: Request, token: string, purpose: string) {
   const visitor = await session(req);

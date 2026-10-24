@@ -1,0 +1,259 @@
+{
+  "id": "ReelReadyProviderPublisherV1",
+  "name": "ReelReady \u2014 publish approved video",
+  "active": false,
+  "versionId": "61ade9e3-6966-42e3-a86a-74d90ea91e81",
+  "nodes": [
+    {
+      "id": "entry",
+      "name": "Approved backend request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "2be4dec7-acf8-4057-9f71-3036911b450d",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reelready-provider-publish",
+        "authentication": "jwtAuth",
+        "responseMode": "responseNode"
+      },
+      "credentials": {
+        "jwtAuth": {
+          "id": "ReelReadyWorkflowJWT",
+          "name": "ReelReady workflow authentication"
+        }
+      }
+    },
+    {
+      "id": "claim",
+      "name": "Verify and consume approved job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0],
+      "retryOnFail": false,
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3010/authorize",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 45000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {postId:$json.body.postId,dispatchToken:$json.body.dispatchToken} }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ReelReadyPublisherBridge",
+          "name": "ReelReady private publisher"
+        }
+      }
+    },
+    {
+      "id": "download-private-video",
+      "name": "Read approved private video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3010/media-download",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {mediaTicket:$json.mediaTicket} }}",
+        "options": {
+          "timeout": 180000,
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ReelReadyPublisherBridge",
+          "name": "ReelReady private publisher"
+        }
+      }
+    },
+    {
+      "id": "publish",
+      "name": "Publish video to selected destinations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [780, 0],
+      "retryOnFail": false,
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.upload-post.com/api/upload",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 300000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          }
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formData",
+              "name": "user",
+              "value": "={{ $('Verify and consume approved job').item.json.profileUsername }}"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "video",
+              "inputDataFieldName": "data"
+            },
+            {
+              "parameterType": "formData",
+              "name": "title",
+              "value": "={{ $('Verify and consume approved job').item.json.title }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "youtube_title",
+              "value": "={{ $('Verify and consume approved job').item.json.title }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "youtube_description",
+              "value": "={{ $('Verify and consume approved job').item.json.youtubeDescription }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "instagram_title",
+              "value": "={{ $('Verify and consume approved job').item.json.instagramCaption }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "x_title",
+              "value": "={{ $('Verify and consume approved job').item.json.xCaption }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "async_upload",
+              "value": "true"
+            },
+            {
+              "parameterType": "formData",
+              "name": "media_type",
+              "value": "REELS"
+            },
+            {
+              "parameterType": "formData",
+              "name": "privacyStatus",
+              "value": "public"
+            },
+            {
+              "parameterType": "formData",
+              "name": "selfDeclaredMadeForKids",
+              "value": "false"
+            },
+            {
+              "parameterType": "formData",
+              "name": "is_ai_generated",
+              "value": "={{ String($('Verify and consume approved job').item.json.synthetic) }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "platform[]",
+              "value": "={{ $('Verify and consume approved job').item.json.platforms }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ReelReadyManagedPublisher",
+          "name": "ReelReady publishing service"
+        }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Return result to ReelReady",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [820, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Approved backend request": {
+      "main": [
+        [
+          {
+            "node": "Verify and consume approved job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify and consume approved job": {
+      "main": [
+        [
+          {
+            "node": "Read approved private video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish video to selected destinations": {
+      "main": [
+        [
+          {
+            "node": "Return result to ReelReady",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read approved private video": {
+      "main": [
+        [
+          {
+            "node": "Publish video to selected destinations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "executionTimeout": 90,
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "pinData": {}
+}

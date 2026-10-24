@@ -1,0 +1,9 @@
+node_modules
+.next*
+.git
+.env*
+artifacts
+test-results
+supabase/.temp
+
+.n8n-local

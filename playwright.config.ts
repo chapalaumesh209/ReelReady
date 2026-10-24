@@ -3,6 +3,32 @@ export default defineConfig({
   testDir: "./tests",
   testMatch: "**/*.spec.ts",
   workers: 1,
+  projects: [
+    {
+      name: "studio",
+      testMatch: "**/studio.spec.ts",
+      use: { baseURL: "http://127.0.0.1:3002" },
+    },
+    {
+      name: "offline",
+      testMatch: "**/offline.spec.ts",
+      use: { baseURL: "http://127.0.0.1:3001" },
+    },
+  ],
+  webServer: [
+    {
+      command: "node scripts/offline-test-server.mjs",
+      url: "http://127.0.0.1:3001/api/health",
+      reuseExistingServer: false,
+      timeout: 120000,
+    },
+    {
+      command: "node scripts/offline-test-server.mjs --studio",
+      url: "http://127.0.0.1:3002/api/health",
+      reuseExistingServer: false,
+      timeout: 120000,
+    },
+  ],
   reporter: [
     ["list"],
     [

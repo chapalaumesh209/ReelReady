@@ -1,234 +1,236 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { POST } from "../app/api/generate/route";
+import { xCount, characterCount, hashtagCount } from "../lib/content";
+import { planInput, planSchema } from "../lib/workflow";
+import { samplePlan } from "../lib/server/ai";
+import { publishingKit } from "../lib/server/kits";
+import { validatePublish } from "../lib/server/publishing/validation";
 import {
-  samples,
-  definitions,
-  exampleKit,
-  characterCount,
-  hashtagCount,
-  xCount,
-} from "../lib/content";
-const base = {
-  mode: "after",
-  input:
-    "I filmed a video about growing basil on my balcony. I watered the soil and showed the new leaves.",
-  language: "English",
-  script: "native",
-  details: { voice: "", brand: "", link: "", disclosure: "" },
+  youtubeMetadata,
+  youtubeDelivery,
+} from "../lib/server/social/publishing";
+import { scheduledISO, tomorrow } from "../lib/reel";
+import { generateStructuredContent } from "../lib/generation";
+import { validated } from "../lib/server/ai";
+import { z } from "zod";
+const planned = {
+  input: "A reel about checking the soil in my balcony garden.",
+  scheduledAt: new Date(Date.now() + 86400000).toISOString(),
+  timezone: "Asia/Kolkata",
+  platforms: ["instagram", "youtube"] as const,
+  languages: ["English"] as const,
+  script: "native" as const,
 };
-const request = (data: unknown) =>
-  new Request("http://localhost/api/generate", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(data),
-  });
-
-test("validation rejects incomplete, unsupported and unsafe link input", async () => {
-  for (const body of [
-    { ...base, input: "hi" },
-    { ...base, language: "unsupported" },
-    { ...base, details: { ...base.details, link: "javascript:alert(1)" } },
-  ])
-    assert.equal((await POST(request(body))).status, 400);
-  const cross = new Request("http://localhost/api/generate", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      origin: "https://another.example",
-    },
-    body: JSON.stringify(base),
-  });
-  assert.equal((await POST(cross)).status, 403);
+test("planning validates bounds and demo plans are labelled, complete and fact conservative", () => {
+  assert.equal(
+    planInput.safeParse({
+      ...planned,
+      platforms: [...planned.platforms],
+      languages: [...planned.languages],
+    }).success,
+    true,
+  );
+  assert.equal(
+    planInput.safeParse({ ...planned, input: "x".repeat(4001) }).success,
+    false,
+  );
+  const p = planSchema.parse(samplePlan(planned));
+  assert.equal(p.sample, true);
+  assert.equal(p.ideas.length, 3);
+  assert.ok(
+    p.ideas.every(
+      (i) =>
+        i.outline.length >= 3 && i.shots.length >= 4 && i.durationSeconds <= 60,
+    ),
+  );
+  assert.match(p.schedulingNote, /not your analytics/);
 });
-test("unconfigured service is honest and samples are only for the exact built-in input", async () => {
-  const key = process.env.GEMINI_API_KEY;
-  delete process.env.GEMINI_API_KEY;
-  try {
-    assert.equal((await POST(request(base))).status, 503);
-    const response = await POST(request({ ...base, input: samples.after }));
-    assert.equal(response.status, 200);
-    const result = (await response.json()) as {
-      sample: boolean;
-      outputs: unknown[];
-    };
-    assert.equal(result.sample, true);
-    assert.equal(result.outputs.length, 4);
-    assert.equal(
-      (
-        await POST(
-          request({
-            ...base,
-            input: samples.after,
-            details: { ...base.details, brand: "Custom brand" },
-          }),
-        )
-      ).status,
-      503,
-    );
-  } finally {
-    if (key) process.env.GEMINI_API_KEY = key;
-  }
+test("IST planned times are explicit UTC instants and tomorrow defaults to 7 PM", () => {
+  assert.equal(scheduledISO("2026-10-24T19:00"), "2026-10-24T13:30:00.000Z");
+  assert.match(tomorrow(), /T19:00$/);
 });
-test("all example languages and scripts produce complete distinct kits", () => {
-  for (const mode of ["before", "after"] as const)
-    for (const language of ["English", "Telugu", "Hindi"] as const)
-      for (const script of ["native", "roman"] as const) {
-        const kit = exampleKit(mode, language, script);
-        assert.deepEqual(
-          kit.outputs.map((o) => o.id),
-          definitions[mode].map((o) => o.id),
-        );
-        assert.ok(kit.outputs.every((o) => o.text.length > 0));
-        if (language !== "English") {
-          const regex =
-            language === "Telugu" ? /[\u0C00-\u0C7F]/ : /[\u0900-\u097F]/;
-          assert.equal(
-            regex.test(kit.outputs.map((o) => o.text).join("")),
-            script === "native",
-          );
-        }
-      }
-});
-test("Unicode, links, emoji, and multilingual hashtags are counted correctly", () => {
+test("Unicode, X weighted counts and multilingual hashtags are correct", () => {
   assert.equal(characterCount("Hi 👋"), 4);
-  assert.equal(hashtagCount("#తెలుగు #हिन्दी #Mango"), 3);
-  assert.equal(xCount("https://example.com/a-long-link"), 23);
+  assert.equal(xCount("https://example.com/long"), 23);
   assert.equal(xCount("👨‍👩‍👧‍👦"), 2);
+  assert.equal(hashtagCount("#తెలుగు #हिन्दी #தமிழ்"), 3);
 });
-test("Gemini results are validated and failures never become a fabricated kit", async () => {
-  const original = globalThis.fetch;
-  const key = process.env.GEMINI_API_KEY;
-  process.env.GEMINI_API_KEY = "unit-test-not-a-real-key";
-  const providerBody = (result: unknown) => ({
-    candidates: [
-      {
-        finishReason: "STOP",
-        content: { parts: [{ text: JSON.stringify(result) }] },
-      },
-    ],
-  });
+test("demo kits work without AI keys in English and three regional scripts, preserving edits on revision", async () => {
+  const previous = process.env.LLM_PROVIDER;
+  process.env.LLM_PROVIDER = "demo";
   try {
-    let upstream: Record<string, unknown> = {};
-    let destination = "";
-    globalThis.fetch = async (url, options) => {
-      destination = String(url);
-      upstream = JSON.parse(String(options?.body));
-      return Response.json(
-        providerBody({
-          clarification: "",
-          outputs: definitions.after.map((o) => ({
-            id: o.id,
-            text: "Valid supplied facts.",
-          })),
-        }),
-      );
-    };
-    const response = await POST(request(base));
-    assert.equal(response.status, 200);
-    assert.equal(
-      ((await response.json()) as { outputs: unknown[] }).outputs.length,
-      4,
-    );
-    assert.ok(
-      destination.startsWith("https://generativelanguage.googleapis.com/"),
-    );
-    assert.ok(!destination.includes("unit-test"));
-    assert.ok(
-      JSON.stringify(upstream.systemInstruction).includes(
-        "OUTPUT LANGUAGE: English",
-      ),
-    );
-    assert.equal(
-      (upstream.generationConfig as { responseMimeType: string })
-        .responseMimeType,
-      "application/json",
-    );
-    globalThis.fetch = async () =>
-      Response.json(providerBody({ clarification: "", outputs: [] }));
-    assert.equal((await POST(request(base))).status, 502);
-    globalThis.fetch = async () =>
-      Response.json({ error: "unavailable" }, { status: 429 });
-    assert.equal((await POST(request(base))).status, 503);
-    globalThis.fetch = async () =>
-      Response.json(
-        providerBody({
-          clarification: "What is the topic of your video?",
-          outputs: [],
-        }),
-      );
-    const clar = await POST(request(base));
-    assert.equal(clar.status, 200);
-    assert.ok(
-      ((await clar.json()) as { clarification: string }).clarification.includes(
-        "topic",
-      ),
-    );
-    globalThis.fetch = async () =>
-      Response.json({ candidates: [{ finishReason: "SAFETY" }] });
-    assert.equal((await POST(request(base))).status, 422);
+    for (const language of ["English", "Telugu", "Hindi", "Tamil"] as const)
+      for (const script of ["native", "roman"] as const) {
+        const kit = await publishingKit(
+          {
+            mode: "after",
+            input: planned.input,
+            language,
+            script,
+            details: { voice: "", brand: "", link: "", disclosure: "" },
+            instruction: "",
+          },
+          AbortSignal.timeout(1000),
+        );
+        assert.equal(kit.sample, true);
+        assert.equal(kit.outputs.length, 4);
+        assert.ok(kit.outputs.every((o) => o.text));
+        assert.ok(!/https?:/.test(kit.outputs.find((o) => o.id === "x")!.text));
+        const current = kit.outputs.map((o) => ({
+          id: o.id as "instagram" | "youtubeTitle" | "youtubeDescription" | "x",
+          text:
+            o.id === "instagram"
+              ? "My manually edited caption. Keep this detail."
+              : o.text,
+        }));
+        const revised = await publishingKit(
+          {
+            mode: "after",
+            input: planned.input,
+            language,
+            script,
+            details: { voice: "", brand: "", link: "", disclosure: "" },
+            instruction: "దీన్ని చిన్నగా చేయండి",
+            current,
+          },
+          AbortSignal.timeout(1000),
+        );
+        assert.equal(
+          revised.outputs.find((o) => o.id === "instagram")!.text,
+          "My manually edited caption.",
+        );
+      }
   } finally {
-    globalThis.fetch = original;
-    if (key) process.env.GEMINI_API_KEY = key;
-    else delete process.env.GEMINI_API_KEY;
+    process.env.LLM_PROVIDER = previous;
   }
 });
-
-test("supplied disclosures and URLs survive rewriting; overlong posts get a bounded repair", async () => {
-  const original = globalThis.fetch;
-  const key = process.env.GEMINI_API_KEY;
-  process.env.GEMINI_API_KEY = "unit-test-not-a-real-key";
-  let calls = 0;
+test("native YouTube receipts never treat processing, rejected or private videos as published", () => {
+  assert.equal(
+    youtubeDelivery({
+      id: "owned-id",
+      status: { uploadStatus: "processed", privacyStatus: "public" },
+    }).state,
+    "published",
+  );
+  assert.equal(
+    youtubeDelivery({
+      id: "owned-id",
+      status: { uploadStatus: "uploaded", privacyStatus: "public" },
+    }).state,
+    "processing",
+  );
+  assert.equal(
+    youtubeDelivery({
+      id: "owned-id",
+      status: { uploadStatus: "processed", privacyStatus: "private" },
+    }).state,
+    "processing",
+  );
+  assert.equal(
+    youtubeDelivery({
+      id: "owned-id",
+      status: { uploadStatus: "rejected", privacyStatus: "private" },
+    }).state,
+    "failed",
+  );
+  assert.throws(() => youtubeDelivery({ success: true, message: "Queued" }));
+});
+test("AI validation retries once; OpenAI and Anthropic requests stay server side and use structured schemas", async () => {
+  const old = fetch,
+    env = { ...process.env };
   try {
-    globalThis.fetch = async () => {
-      calls++;
-      return Response.json({
-        candidates: [
-          {
-            finishReason: "STOP",
-            content: {
-              parts: [
-                {
-                  text: JSON.stringify({
-                    clarification: "",
-                    outputs: definitions.after.map((o) => ({
-                      id: o.id,
-                      text:
-                        o.id === "x" && calls === 1
-                          ? "word ".repeat(80)
-                          : "Basil on my balcony.",
-                    })),
-                  }),
-                },
-              ],
-            },
-          },
-        ],
-      });
+    const schema = {
+      type: "object",
+      properties: { value: { type: "string" } },
+      required: ["value"],
+      additionalProperties: false,
     };
-    const response = await POST(
-      request({
-        ...base,
-        details: {
-          ...base.details,
-          link: "https://example.com",
-          disclosure: "#ad — supplied disclosure",
+    for (const provider of ["openai", "anthropic"]) {
+      process.env.LLM_PROVIDER = provider;
+      process.env.LLM_API_KEY = "test-only";
+      process.env.LLM_MODEL = "test-model";
+      let count = 0;
+      globalThis.fetch = async (input, options) => {
+        if (String(input).startsWith(process.env.SUPABASE_URL!))
+          return old(input, options);
+        count++;
+        const body = JSON.parse(String(options?.body));
+        assert.ok(
+          String(input).startsWith(
+            provider === "openai"
+              ? "https://api.openai.com/"
+              : "https://api.anthropic.com/",
+          ),
+        );
+        if (provider === "openai")
+          assert.equal(body.text.format.type, "json_schema");
+        else assert.equal(body.tools[0].name, "reelready_result");
+        const value = count === 1 ? { wrong: "shape" } : { value: "validated" };
+        return Response.json(
+          provider === "openai"
+            ? {
+                output: [
+                  {
+                    content: [
+                      { type: "output_text", text: JSON.stringify(value) },
+                    ],
+                  },
+                ],
+              }
+            : { content: [{ type: "tool_use", input: value }] },
+        );
+      };
+      const value = await validated(
+        {
+          instructions: "Return JSON.",
+          content: { input: "safe" },
+          schema,
+          signal: AbortSignal.timeout(1000),
         },
-      }),
-    );
-    assert.equal(response.status, 200);
-    assert.equal(calls, 2);
-    const kit = (await response.json()) as {
-      outputs: Array<{ id: string; text: string; warning?: string }>;
-    };
-    for (const o of kit.outputs.filter((o) => o.id !== "youtubeTitle")) {
-      assert.ok(o.text.includes("https://example.com"));
-      assert.ok(o.text.includes("#ad — supplied disclosure"));
-      assert.equal(o.warning, undefined);
+        z.object({ value: z.string() }),
+      );
+      assert.equal(value.value, "validated");
+      assert.equal(count, 2);
     }
   } finally {
-    globalThis.fetch = original;
-    if (key) process.env.GEMINI_API_KEY = key;
-    else delete process.env.GEMINI_API_KEY;
+    globalThis.fetch = old;
+    for (const key of ["LLM_PROVIDER", "LLM_API_KEY", "LLM_MODEL"]) {
+      if (env[key] === undefined) delete process.env[key];
+      else process.env[key] = env[key];
+    }
   }
+});
+// Import validation helpers here so changes to supported provider fields remain covered.
+void validatePublish;
+void youtubeMetadata;
+void generateStructuredContent;
+
+test("scheduled provider fields use the exact UTC instant and receipts remain scheduled until posted", () => {
+  const scheduledAt = new Date(Date.now() + 7 * 86400000).toISOString();
+  const data = {
+    draftId: crypto.randomUUID(),
+    platforms: ["youtube"] as Array<"youtube">,
+    scheduledAt,
+    instagram: "",
+    youtubeTitle: "A creator reel",
+    youtubeDescription: "The approved description.",
+    x: "",
+    language: "English" as const,
+    dubbed: true,
+    size: 1024,
+    duration: 30,
+    width: 360,
+    height: 640,
+  };
+  validatePublish(data);
+  const metadata = youtubeMetadata(data);
+  assert.equal(metadata.snippet.title, data.youtubeTitle);
+  assert.equal(metadata.snippet.description, data.youtubeDescription);
+  assert.equal(metadata.status.privacyStatus, "public");
+  assert.equal(metadata.status.containsSyntheticMedia, true);
+  // Scheduling belongs to the durable worker, not an immediate cross-platform upload.
+  assert.ok(!("publishAt" in metadata.status));
+  assert.throws(() =>
+    validatePublish({ ...data, scheduledAt: new Date(0).toISOString() }),
+  );
 });

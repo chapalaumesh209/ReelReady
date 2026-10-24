@@ -7,10 +7,29 @@ import { capability } from "./server";
 export const VIDEO_BUCKET = "reelready-videos";
 export const assetInput = z.object({
   draftId: z.string().uuid(),
-  kind: z.enum(["original", "english"]),
+  kind: z.enum(["original", "english", "source_audio"]),
   name: z.string().min(1).max(250),
-  mime: z.enum(["video/mp4", "video/webm", "video/quicktime"]),
+  mime: z.enum([
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/webm",
+    "audio/ogg",
+    "audio/flac",
+    "audio/aac",
+  ]),
   size: z.number().int().positive().refine(Number.isSafeInteger),
+  metadata: z
+    .object({
+      duration: z.number().positive(),
+      width: z.number().positive(),
+      height: z.number().positive(),
+    })
+    .optional(),
   lastModified: z.number().finite().nonnegative().default(0),
 });
 export type AssetInput = z.infer<typeof assetInput>;
@@ -22,9 +41,16 @@ export type StoredVideo = {
   path: string;
 };
 export function storageConfiguration() {
-  const url = process.env.SUPABASE_URL || "",
-    publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY || "",
-    secret = process.env.SUPABASE_SECRET_KEY || "";
+  const url =
+      process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    publishableKey =
+      process.env.SUPABASE_PUBLISHABLE_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+      "",
+    secret =
+      process.env.SUPABASE_SECRET_KEY ||
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      "";
   return {
     url,
     publishableKey,
@@ -32,7 +58,7 @@ export function storageConfiguration() {
     configured:
       !!url &&
       !!publishableKey &&
-      secret.startsWith("sb_secret_") &&
+      (secret.startsWith("sb_secret_") || secret.startsWith("eyJ")) &&
       !/[•…\s]/.test(secret),
   };
 }
@@ -52,7 +78,11 @@ export function storageAdmin() {
     supabaseOptions: {
       global: {
         fetch: (input, init) =>
-          fetch(input, { ...init, signal: AbortSignal.timeout(30000) }),
+          fetch(input, {
+            ...init,
+            cache: "no-store",
+            signal: AbortSignal.timeout(30000),
+          }),
       },
     },
   });
@@ -95,7 +125,19 @@ export async function ensureVideoBucket() {
     storageError(result.error);
   const created = await admin.storage.createBucket(VIDEO_BUCKET, {
     public: false,
-    allowedMimeTypes: ["video/mp4", "video/webm", "video/quicktime"],
+    allowedMimeTypes: [
+      "video/mp4",
+      "video/webm",
+      "video/quicktime",
+      "audio/wav",
+      "audio/x-wav",
+      "audio/mpeg",
+      "audio/mp4",
+      "audio/webm",
+      "audio/ogg",
+      "audio/flac",
+      "audio/aac",
+    ],
   });
   if (created.error && !/already exists/i.test(created.error.message))
     storageError(created.error);

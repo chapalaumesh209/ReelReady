@@ -1,0 +1,104 @@
+{
+  "id": "ReelReadyProviderStatusV1",
+  "name": "ReelReady \u2014 check publication results",
+  "active": false,
+  "versionId": "18845c82-0c55-435e-88ac-96445a1b391e",
+  "nodes": [
+    {
+      "id": "entry",
+      "name": "Approved backend request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a5d67e26-970f-4d52-bb70-e9c55ee69262",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reelready-provider-status",
+        "authentication": "jwtAuth",
+        "responseMode": "responseNode"
+      },
+      "credentials": {
+        "jwtAuth": {
+          "id": "ReelReadyWorkflowJWT",
+          "name": "ReelReady workflow authentication"
+        }
+      }
+    },
+    {
+      "id": "status",
+      "name": "Read destination receipts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 0],
+      "retryOnFail": false,
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://api.upload-post.com/api/uploadposts/status?request_id=' + encodeURIComponent($json.body.requestId) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 45000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ReelReadyManagedPublisher",
+          "name": "ReelReady publishing service"
+        }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Return result to ReelReady",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [560, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Approved backend request": {
+      "main": [
+        [
+          {
+            "node": "Read destination receipts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read destination receipts": {
+      "main": [
+        [
+          {
+            "node": "Return result to ReelReady",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "executionTimeout": 90,
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "pinData": {}
+}

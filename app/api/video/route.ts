@@ -1,29 +1,55 @@
+import { providerCapacity } from "@/lib/server/provider-budget";
+import { rateLimit } from "@/lib/server/rate-limit";
+import { demoAI, sampleOutputsAllowed } from "@/lib/server/ai";
+import { withSession } from "@/lib/supabase/server";
 import { z } from "zod";
 import { GenerationError } from "@/lib/generation";
-import {
-  body,
-  capability,
-  failure,
-  json,
-  limit,
-  session,
-  sign,
-} from "@/lib/server";
+import { body, capability, failure, json, session, sign } from "@/lib/server";
 import { storedURL } from "@/lib/supabase";
 import { googleFile, googleHeaders, videoStream } from "@/lib/media-server";
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   try {
     const visitor = await session(req);
-    limit(visitor.id, "upload", 12);
+    if (
+      demoAI() ||
+      !process.env.GEMINI_API_KEY ||
+      !(await providerCapacity())
+    ) {
+      if (!sampleOutputsAllowed())
+        throw new GenerationError(
+          "Live video analysis is unavailable or has reached capacity. Your recording is saved; retry analysis later. No sample result was generated.",
+          503,
+        );
+      const data = await body(
+        req,
+        z.object({ assetToken: z.string().max(5000) }),
+      );
+      const { cap } = await storedURL(req, data.assetToken, 60);
+      return json({
+        token: await sign(
+          {
+            visitor: visitor.id,
+            name: demoAI() ? "demo" : "notes",
+            path: cap.path,
+          },
+          "video",
+          3600,
+        ),
+        state: "ACTIVE",
+      });
+    }
+    await rateLimit(req, "video-analysis", 12);
     let source = req;
+    let assetPath = "";
     if (req.headers.get("content-type")?.includes("application/json")) {
       const { assetToken } = await body(
         req,
         z.object({ assetToken: z.string().max(5000) }),
       );
       const { cap, url } = await storedURL(req, assetToken, 600);
+      assetPath = String(cap.path);
       const remote = await fetch(url, {
-        signal: AbortSignal.any([req.signal, AbortSignal.timeout(300000)]),
+        signal: AbortSignal.any([req.signal, AbortSignal.timeout(55000)]),
       });
       if (!remote.ok || !remote.body)
         throw new GenerationError(
@@ -42,7 +68,7 @@ export async function POST(req: Request) {
       } as RequestInit);
     }
     const { size, mime, stream } = await videoStream(source);
-    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(120000)]);
+    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(55000)]);
     const start = await fetch(
       "https://generativelanguage.googleapis.com/upload/v1beta/files",
       {
@@ -98,29 +124,37 @@ export async function POST(req: Request) {
         502,
       );
     const token = await sign(
-      { visitor: visitor.id, name: file.name },
+      { visitor: visitor.id, name: file.name, path: assetPath },
       "video",
       47 * 3600,
     );
-    return json({ token, state: file.state });
+    return json({ token, state: file.state, sourcePath: assetPath });
   } catch (e) {
     return failure(e);
   }
 }
-export async function GET(req: Request) {
+async function handleGET(req: Request) {
   try {
     const token = new URL(req.url).searchParams.get("token") || "";
     const data = await capability(req, token, "video");
+    if (["demo", "notes"].includes(String(data.name))) {
+      if (!sampleOutputsAllowed())
+        throw new GenerationError(
+          "This recording needs live analysis. Retry with the saved video.",
+          409,
+        );
+      return json({ state: "ACTIVE" });
+    }
     const file = await googleFile(
       String(data.name),
       AbortSignal.timeout(15000),
     );
-    return json({ state: file.state });
+    return json({ state: file.state, sourcePath: data.path || "" });
   } catch (e) {
     return failure(e);
   }
 }
-export async function DELETE(req: Request) {
+async function handleDELETE(req: Request) {
   try {
     const { token } = await body(
       req,
@@ -128,6 +162,7 @@ export async function DELETE(req: Request) {
     );
     const data = await capability(req, token, "video");
     const name = String(data.name);
+    if (["demo", "notes"].includes(name)) return json({ deleted: true });
     if (!/^files\/[a-zA-Z0-9_-]+$/.test(name))
       throw new GenerationError("Invalid file.", 400);
     const response = await fetch(
@@ -148,3 +183,11 @@ export async function DELETE(req: Request) {
     return failure(e);
   }
 }
+
+export const GET = withSession(handleGET);
+
+export const POST = withSession(handlePOST);
+
+export const DELETE = withSession(handleDELETE);
+
+export const maxDuration = 60;

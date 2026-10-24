@@ -1,0 +1,309 @@
+{
+  "id": "ReelReadyProviderConnectV1",
+  "name": "ReelReady \u2014 connect creator accounts",
+  "active": false,
+  "versionId": "32654757-8f61-4fbc-a9b0-29f590cd0b54",
+  "nodes": [
+    {
+      "id": "entry",
+      "name": "Creator clicks Connect",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reelready-provider-connect",
+        "authentication": "jwtAuth",
+        "responseMode": "responseNode"
+      },
+      "credentials": {
+        "jwtAuth": {
+          "id": "ReelReadyWorkflowJWT",
+          "name": "ReelReady workflow authentication"
+        }
+      },
+      "webhookId": "9cbff892-583c-4235-a356-d2b6ddb30dc6"
+    },
+    {
+      "id": "claim",
+      "name": "Verify creator workspace",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3010/connect-authorize",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {connectionToken:$json.body.connectionToken} }}",
+        "options": {
+          "timeout": 20000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ReelReadyPublisherBridge",
+          "name": "ReelReady private publisher"
+        }
+      },
+      "retryOnFail": false
+    },
+    {
+      "id": "need",
+      "name": "New creator profile needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [520, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "need-condition",
+              "leftValue": "={{ $json.needsCreation }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "create",
+      "name": "Create creator profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [780, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.upload-post.com/api/uploadposts/users",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {username:$node['Verify creator workspace'].json.profileUsername,display_name:'ReelReady creator'} }}",
+        "options": {
+          "timeout": 20000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ReelReadyManagedPublisher",
+          "name": "ReelReady publishing service"
+        }
+      },
+      "retryOnFail": false
+    },
+    {
+      "id": "accepted",
+      "name": "Profile ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1040, 200],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "accepted-condition",
+              "leftValue": "={{ [200,201,409].includes(Number($json.statusCode)) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "start",
+      "name": "Start selected account connection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.upload-post.com/api/uploadposts/oauth/' + $node['Verify creator workspace'].json.platform + '/start' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {profile:$node['Verify creator workspace'].json.profileUsername,redirect_url:$node['Verify creator workspace'].json.redirectUrl} }}",
+        "options": {
+          "timeout": 20000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ReelReadyManagedPublisher",
+          "name": "ReelReady publishing service"
+        }
+      },
+      "retryOnFail": false
+    },
+    {
+      "id": "success",
+      "name": "Return platform authorization link",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1560, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {authorize_url:$json.authorize_url} }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "failure",
+      "name": "Return connection capacity error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1300, 400],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {error:\"connection_capacity\"} }}",
+        "options": {
+          "responseCode": 503
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Creator clicks Connect": {
+      "main": [
+        [
+          {
+            "node": "Verify creator workspace",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify creator workspace": {
+      "main": [
+        [
+          {
+            "node": "New creator profile needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New creator profile needed?": {
+      "main": [
+        [
+          {
+            "node": "Create creator profile",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Start selected account connection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create creator profile": {
+      "main": [
+        [
+          {
+            "node": "Profile ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Profile ready?": {
+      "main": [
+        [
+          {
+            "node": "Start selected account connection",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return connection capacity error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start selected account connection": {
+      "main": [
+        [
+          {
+            "node": "Return platform authorization link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "executionTimeout": 90,
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "pinData": {}
+}

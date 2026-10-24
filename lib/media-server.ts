@@ -1,6 +1,6 @@
-import { GenerationError, generationConfiguration } from "./generation";
+import { GenerationError } from "./generation";
 export function googleHeaders() {
-  const { key } = generationConfiguration();
+  const key = process.env.GEMINI_API_KEY;
   if (!key)
     throw new GenerationError("Video understanding is not connected yet.", 503);
   return { "x-goog-api-key": key };

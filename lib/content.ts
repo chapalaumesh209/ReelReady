@@ -1,6 +1,6 @@
 import twitterText from "twitter-text";
 export type Mode = "before" | "after";
-export type Language = "English" | "Telugu" | "Hindi";
+export type Language = "English" | "Telugu" | "Hindi" | "Tamil";
 export type Script = "native" | "roman";
 export type Output = {
   id: string;
@@ -15,6 +15,13 @@ export type Kit = {
   outputs: Output[];
   sample?: boolean;
   clarification?: string;
+  discovery?: {
+    primaryKeyword: string;
+    supportingKeywords: string[];
+    searchIntent: string;
+    location: string;
+    liveTrendsChecked: false;
+  };
 };
 export const definitions = {
   before: [
@@ -77,6 +84,34 @@ const text = {
       ],
     },
   },
+  Tamil: {
+    native: {
+      before: [
+        "மாம்பழத் தயிர் கிண்ணம் செய்யலாமா?",
+        "மாம்பழத்தை நறுக்குங்கள். தயிருடன் சேர்க்கவும். கிரனோலா சேர்க்கவும்.",
+        "□ பொருட்கள்\n□ கலக்கும் காட்சி\n□ தயாரான கிண்ணம்",
+      ],
+      after: [
+        "மாம்பழம், தயிர், கிரனோலா — எளிய காலை உணவு. #MangoBowl #Breakfast",
+        "மாம்பழத் தயிர் கிண்ணம்",
+        "மாம்பழம் மற்றும் கிரனோலாவுடன் தயிர். உங்கள் விருப்பப் பழத்தைச் சேர்க்கலாம்.",
+        "மாம்பழம், தயிர், கிரனோலா. உங்கள் காலை உணவு என்ன?",
+      ],
+    },
+    roman: {
+      before: [
+        "Maampazha thayir kinnam seyyalama?",
+        "Maampazhathai narukkavum. Thayir serkkavum. Granola podavum.",
+        "□ Porutkal\n□ Kalakkum kaatchi\n□ Thayaaraana kinnam",
+      ],
+      after: [
+        "Maampazham, thayir, granola — eliya kaalai unavu. #MangoBowl #Breakfast",
+        "Maampazha thayir kinnam",
+        "Maampazham matrum granola-vudan thayir. Ungal viruppa pazhathai serkkalaam.",
+        "Maampazham, thayir, granola. Ungal kaalai unavu enna?",
+      ],
+    },
+  },
   Hindi: {
     native: {
       before: [
@@ -129,4 +164,35 @@ export function hashtagCount(value: string) {
 }
 export function xCount(value: string) {
   return twitterText.parseTweet(value).weightedLength;
+}
+
+export const hasLinks = (value: string) =>
+  twitterText.extractUrls(value, { extractUrlsWithoutProtocol: true }).length >
+    0 || /https?:\/\/|www\./i.test(value);
+
+/** Recognize the old English fixture kit even if an earlier rewrite cleared its badge. */
+export function isPlaceholderKit(
+  kit?: {
+    sample?: boolean;
+    outputs: Array<{ id: string; text: string }>;
+  } | null,
+) {
+  if (!kit) return false;
+  if (kit.sample) return true;
+  const old = [
+    "A moment from my latest reel. What would you add? #Creator #Reel",
+    "A moment worth sharing",
+    "The story and details are in the video. Share your takeaway below.",
+    "A moment from my latest reel. What would you add?",
+  ];
+  return (
+    kit.outputs.length >= 3 &&
+    kit.outputs.filter((output) =>
+      old.some(
+        (text) =>
+          output.text.trim() === text ||
+          output.text.trim().startsWith(text + "\n"),
+      ),
+    ).length >= 3
+  );
 }

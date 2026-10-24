@@ -3,9 +3,10 @@ export async function cloudUpload(
   file: Blob,
   name: string,
   draftId: string,
-  kind: "original" | "english",
+  kind: "original" | "english" | "source_audio",
   signal: AbortSignal,
   progress: (label: string) => void,
+  metadata?: { duration: number; width: number; height: number },
 ): Promise<StoredVideo> {
   async function post<T>(body: unknown): Promise<T> {
     const r = await fetch("/api/storage", {
@@ -21,6 +22,12 @@ export async function cloudUpload(
       );
     return d;
   }
+  const limits = await fetch("/api/limits", { signal }).then(
+    (r) => r.json() as Promise<import("./limits").PublicLimits>,
+  );
+  const { uploadProblem } = await import("./limits");
+  const problem = uploadProblem(file.size, metadata?.duration, limits);
+  if (problem) throw new Error(problem);
   const prepared = await post<{
     alreadyUploaded: boolean;
     token: string;
@@ -31,6 +38,7 @@ export async function cloudUpload(
     bucket: string;
   }>({
     action: "prepare",
+    metadata,
     draftId,
     kind,
     name,
@@ -79,7 +87,7 @@ export async function cloudUpload(
           finish(
             new Error(
               status === 413
-                ? "Supabase rejected this file under its project storage limit. Increase the project’s storage limit and retry. ReelReady adds no file-size cap."
+                ? "Storage could not accept this file. Try a smaller video or check the project storage allowance."
                 : status === 401 || status === 403
                   ? "The upload link expired or cloud storage needs attention. Please retry."
                   : "The cloud upload was interrupted. Retry to resume the transfer.",
@@ -109,5 +117,9 @@ export async function cloudUpload(
         });
     });
   }
-  return post<StoredVideo>({ action: "complete", token: prepared.token });
+  return post<StoredVideo>({
+    action: "complete",
+    token: prepared.token,
+    metadata,
+  });
 }

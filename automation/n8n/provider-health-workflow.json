@@ -1,0 +1,65 @@
+{
+  "id": "ReelReadyProviderHealthV1",
+  "name": "ReelReady \u2014 publishing workflow health",
+  "active": false,
+  "versionId": "45631096-1a9a-4469-a83b-838ea49c78b7",
+  "nodes": [
+    {
+      "id": "entry",
+      "name": "Approved backend request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "9ec9779b-07b0-4e41-9dd1-c0160201ea6e",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reelready-provider-health",
+        "authentication": "jwtAuth",
+        "responseMode": "responseNode"
+      },
+      "credentials": {
+        "jwtAuth": {
+          "id": "ReelReadyWorkflowJWT",
+          "name": "ReelReady workflow authentication"
+        }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Return result to ReelReady",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [280, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {ready:true} }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Approved backend request": {
+      "main": [
+        [
+          {
+            "node": "Return result to ReelReady",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "executionTimeout": 90,
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "pinData": {}
+}

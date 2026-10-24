@@ -38,7 +38,13 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    "**/*.mts",
+    ".next-offline/types/**/*.ts",
+    ".next-offline/dev/types/**/*.ts",
+    ".next-test-studio/types/**/*.ts",
+    ".next-test-studio/dev/types/**/*.ts",
+    ".next-flow-build/types/**/*.ts",
+    ".next-flow-build/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

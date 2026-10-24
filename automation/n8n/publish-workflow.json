@@ -1,0 +1,59 @@
+{
+  "id": "ReelReadyPublisherV1",
+  "name": "ReelReady — process approved publishing jobs",
+  "active": false,
+  "versionId": "13c5ad90-bf34-4aca-acfe-145948c23549",
+  "nodes": [
+    {
+      "id": "reelready-schedule",
+      "name": "Check due jobs every 5 seconds",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "rule": { "interval": [{ "field": "seconds", "secondsInterval": 5 }] }
+      }
+    },
+    {
+      "id": "reelready-publish-step",
+      "name": "Advance approved publication",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3010/tick",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000,
+          "redirect": { "redirect": { "followRedirects": false } }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ReelReadyPublisherBridge",
+          "name": "ReelReady private publisher"
+        }
+      },
+      "retryOnFail": false
+    }
+  ],
+  "connections": {
+    "Check due jobs every 5 seconds": {
+      "main": [
+        [{ "node": "Advance approved publication", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "executionTimeout": 120,
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "pinData": {}
+}

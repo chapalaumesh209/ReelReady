@@ -157,7 +157,7 @@ export async function exportDub(
       new Blob(parts, { type: "application/wasm" }),
     );
     await ff.load({
-      classWorkerURL: "/ffmpeg/worker.js",
+      classWorkerURL: `${location.origin}/ffmpeg/worker.js`,
       coreURL: `${location.origin}/ffmpeg/ffmpeg-core.js`,
       wasmURL,
     });
@@ -223,4 +223,34 @@ export async function exportDub(
     ff.terminate();
     if (wasmURL) URL.revokeObjectURL(wasmURL);
   }
+}
+
+export function normalizeAudio(file: File) {
+  const aliases: Record<string, string> = {
+    "audio/x-wav": "audio/wav",
+    "audio/mp3": "audio/mpeg",
+    "audio/x-m4a": "audio/mp4",
+  };
+  const types: Record<string, string> = {
+    wav: "audio/wav",
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    webm: "audio/webm",
+    ogg: "audio/ogg",
+    flac: "audio/flac",
+    aac: "audio/aac",
+  };
+  const raw = file.type.toLowerCase().split(";")[0],
+    extension = file.name.split(".").at(-1)?.toLowerCase() || "";
+  const mime =
+    aliases[raw] ||
+    (!raw || raw === "application/octet-stream" ? types[extension] : raw);
+  if (!Object.values(types).includes(mime))
+    throw new Error(
+      "Upload a WAV, MP3, M4A, WebM, Ogg, FLAC or AAC voice recording.",
+    );
+  return new File([file], file.name, {
+    type: mime,
+    lastModified: file.lastModified,
+  });
 }
