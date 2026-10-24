@@ -68,7 +68,7 @@ async function handlePOST(req: Request) {
           duration: data.duration,
           filmingNote: data.filmingNote,
         },
-        AbortSignal.any([req.signal, AbortSignal.timeout(55000)]),
+        AbortSignal.any([req.signal, AbortSignal.timeout(180000)]),
       );
       delete analysis.sample;
       analysis.assetPath = cap.path ? String(cap.path) : undefined;
@@ -92,4 +92,4 @@ async function handlePOST(req: Request) {
 
 export const POST = withSession(handlePOST);
 
-export const maxDuration = 60;
+export const maxDuration = 240;

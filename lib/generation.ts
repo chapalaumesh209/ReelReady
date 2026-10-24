@@ -33,16 +33,56 @@ export function generationConfiguration() {
           : "claude-sonnet-4-6"),
   };
 }
-export async function generateStructuredContent(options: {
+type GenerationOptions = {
   instructions: string;
   content: unknown;
   schema: Record<string, unknown>;
   signal: AbortSignal;
   providerOverride?: "gemini";
   mediaParts?: Array<{ fileData: { fileUri: string; mimeType: string } }>;
-}): Promise<unknown> {
+};
+export function generationRequestTimeout(media = false) {
+  const fallback = media ? 90000 : 45000;
+  const value = Number(
+    process.env[media ? "AI_MEDIA_TIMEOUT_MS" : "AI_REQUEST_TIMEOUT_MS"] ||
+      fallback,
+  );
+  return Number.isSafeInteger(value) && value >= 1000 && value <= 120000
+    ? value
+    : fallback;
+}
+export async function generateStructuredContent(
+  options: GenerationOptions,
+): Promise<unknown> {
+  const media = !!options.mediaParts?.length;
+  const signal = AbortSignal.any([
+    options.signal,
+    AbortSignal.timeout(generationRequestTimeout(media)),
+  ]);
+  try {
+    return await requestStructuredContent({ ...options, signal });
+  } catch (error) {
+    // Preserve an explicit cancellation, including its reason. A slow provider
+    // can be retried once by validated() while the enclosing route has time left.
+    if (options.signal.aborted) throw error;
+    if (
+      signal.aborted ||
+      (error instanceof Error && error.name === "TimeoutError")
+    )
+      throw new GenerationError(
+        media
+          ? "Video analysis took longer than expected. Your uploaded recording is saved; retry the review."
+          : "The writing service took longer than expected. Your input and existing captions are saved; try again.",
+        504,
+      );
+    throw error;
+  }
+}
+async function requestStructuredContent(
+  options: GenerationOptions,
+): Promise<unknown> {
   let { key, model, provider } = generationConfiguration();
-  const signal = AbortSignal.any([options.signal, AbortSignal.timeout(18000)]);
+  const signal = options.signal;
   if (options.mediaParts?.length || options.providerOverride === "gemini") {
     provider = "gemini";
     key = process.env.GEMINI_API_KEY;

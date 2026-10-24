@@ -205,6 +205,128 @@ void validatePublish;
 void youtubeMetadata;
 void generateStructuredContent;
 
+test("slow generation retries within the longer provider window without cancelling the creator request", async () => {
+  const oldFetch = fetch,
+    oldTimeout = AbortSignal.timeout;
+  const env = { ...process.env };
+  const windows: number[] = [];
+  let calls = 0;
+  const parent = new AbortController();
+  try {
+    process.env.LLM_PROVIDER = "gemini";
+    process.env.LLM_API_KEY = "test-only";
+    delete process.env.AI_REQUEST_TIMEOUT_MS;
+    AbortSignal.timeout = (ms) => {
+      windows.push(ms);
+      if (ms !== 45000) return oldTimeout(ms);
+      const controller = new AbortController();
+      setTimeout(
+        () =>
+          controller.abort(new DOMException("slow provider", "TimeoutError")),
+        20,
+      );
+      return controller.signal;
+    };
+    globalThis.fetch = async (input, init) => {
+      if (String(input).startsWith(process.env.SUPABASE_URL!))
+        return oldFetch(input, init);
+      calls++;
+      if (calls === 1)
+        return new Promise<Response>((_, reject) => {
+          init!.signal!.addEventListener(
+            "abort",
+            () => reject(init!.signal!.reason),
+            { once: true },
+          );
+        });
+      return Response.json({
+        candidates: [
+          {
+            finishReason: "STOP",
+            content: { parts: [{ text: '{"value":"ready"}' }] },
+          },
+        ],
+      });
+    };
+    const result = await validated(
+      {
+        instructions: "Return JSON",
+        content: {},
+        schema: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+        },
+        signal: parent.signal,
+      },
+      z.object({ value: z.string() }),
+    );
+    assert.equal(result.value, "ready");
+    assert.equal(calls, 2);
+    assert.ok(windows.includes(45000));
+    assert.equal(parent.signal.aborted, false);
+  } finally {
+    globalThis.fetch = oldFetch;
+    AbortSignal.timeout = oldTimeout;
+    for (const key of ["LLM_PROVIDER", "LLM_API_KEY", "AI_REQUEST_TIMEOUT_MS"])
+      if (env[key] === undefined) delete process.env[key];
+      else process.env[key] = env[key];
+  }
+});
+
+test("video generation has its own window and preserves an explicit creator cancellation without retry", async () => {
+  const oldFetch = fetch,
+    oldTimeout = AbortSignal.timeout;
+  const env = { ...process.env };
+  let window = 0,
+    calls = 0;
+  const parent = new AbortController();
+  try {
+    process.env.GEMINI_API_KEY = "test-only";
+    delete process.env.AI_MEDIA_TIMEOUT_MS;
+    AbortSignal.timeout = (ms) => {
+      if (ms === 90000) window = ms;
+      return oldTimeout(ms);
+    };
+    globalThis.fetch = async (input, init) => {
+      if (String(input).startsWith(process.env.SUPABASE_URL!))
+        return oldFetch(input, init);
+      calls++;
+      parent.abort(new DOMException("Creator cancelled", "AbortError"));
+      throw init!.signal!.reason;
+    };
+    await assert.rejects(
+      () =>
+        validated(
+          {
+            instructions: "Review video",
+            content: {},
+            schema: { type: "object" },
+            mediaParts: [
+              {
+                fileData: {
+                  fileUri: "https://example.com/video",
+                  mimeType: "video/mp4",
+                },
+              },
+            ],
+            signal: parent.signal,
+          },
+          z.object({}),
+        ),
+      { name: "AbortError" },
+    );
+    assert.equal(window, 90000);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = oldFetch;
+    AbortSignal.timeout = oldTimeout;
+    for (const key of ["GEMINI_API_KEY", "AI_MEDIA_TIMEOUT_MS"])
+      if (env[key] === undefined) delete process.env[key];
+      else process.env[key] = env[key];
+  }
+});
+
 test("scheduled provider fields use the exact UTC instant and receipts remain scheduled until posted", () => {
   const scheduledAt = new Date(Date.now() + 7 * 86400000).toISOString();
   const data = {

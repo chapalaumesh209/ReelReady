@@ -1,5 +1,9 @@
 import nextEnv from "@next/env";
 nextEnv.loadEnvConfig(process.cwd(), true);
+const { mediaWorkerRuntime, createMediaHealthServer } = await import(
+  "../lib/server/media/runtime"
+);
+const runtime = mediaWorkerRuntime();
 const { publisherCoordinatorPrefix } = await import(
   "../lib/server/automation/status"
 );
@@ -33,8 +37,14 @@ const executor = publishExecutor();
 const provider = publishingProvider();
 const admin = storageAdmin();
 let stopped = false;
+let lastHeartbeat = 0;
+const health = runtime.port
+  ? createMediaHealthServer(
+      () => !stopped && Date.now() - lastHeartbeat < 60000,
+    )
+  : undefined;
 const bridge =
-  executor === "n8n"
+  executor === "n8n" && !runtime.only
     ? createPublisherBridge({
         ...publisherBridgeConfiguration(),
         demo: demoMode,
@@ -75,6 +85,7 @@ for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () => {
     stopped = true;
     bridge?.close();
+    health?.close();
   });
 async function heartbeat() {
   const r = await admin
@@ -84,7 +95,8 @@ async function heartbeat() {
     console.error(
       "Media worker database unavailable; verify local migrations.",
     );
-  if (executor === "n8n" && provider === "uploadpost") {
+  else lastHeartbeat = Date.now();
+  if (!runtime.only && executor === "n8n" && provider === "uploadpost") {
     try {
       const health = await callPublishingWorkflow("health", {});
       if (health.ready === true)
@@ -99,6 +111,15 @@ async function heartbeat() {
   }
 }
 await heartbeat();
+if (health) {
+  await new Promise<void>((resolve, reject) => {
+    health.once("error", reject);
+    health.listen(runtime.port, runtime.host, () => {
+      health.off("error", reject);
+      resolve();
+    });
+  });
+}
 const timer = setInterval(() => void heartbeat(), 15000);
 console.log(
   "ReelReady media worker ready. Concurrency: 1. Private FFmpeg processing enabled.",
@@ -107,7 +128,8 @@ while (!stopped) {
   try {
     const mediaWorked = await workerOnce();
     const publishingWorked =
-      (executor === "native" || provider === "uploadpost") &&
+      !runtime.only &&
+      executor === "native" &&
       (await publicationWorkerOnce(id));
     if (!mediaWorked && !publishingWorked)
       await new Promise((r) => setTimeout(r, 1000));

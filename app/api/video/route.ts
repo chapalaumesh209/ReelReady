@@ -49,7 +49,7 @@ async function handlePOST(req: Request) {
       const { cap, url } = await storedURL(req, assetToken, 600);
       assetPath = String(cap.path);
       const remote = await fetch(url, {
-        signal: AbortSignal.any([req.signal, AbortSignal.timeout(55000)]),
+        signal: AbortSignal.any([req.signal, AbortSignal.timeout(180000)]),
       });
       if (!remote.ok || !remote.body)
         throw new GenerationError(
@@ -68,7 +68,7 @@ async function handlePOST(req: Request) {
       } as RequestInit);
     }
     const { size, mime, stream } = await videoStream(source);
-    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(55000)]);
+    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(180000)]);
     const start = await fetch(
       "https://generativelanguage.googleapis.com/upload/v1beta/files",
       {
@@ -190,4 +190,4 @@ export const POST = withSession(handlePOST);
 
 export const DELETE = withSession(handleDELETE);
 
-export const maxDuration = 60;
+export const maxDuration = 240;

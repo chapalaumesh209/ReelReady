@@ -7,3 +7,8 @@ test-results
 supabase/.temp
 
 .n8n-local
+.n8n-hosted
+work
+.wrangler
+dist
+.env.vercel.production.local

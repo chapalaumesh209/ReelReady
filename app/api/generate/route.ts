@@ -16,7 +16,7 @@ export const POST = withSession(async (req: Request) => {
     return json(
       await publishingKit(
         data,
-        AbortSignal.any([req.signal, AbortSignal.timeout(55000)]),
+        AbortSignal.any([req.signal, AbortSignal.timeout(180000)]),
       ),
     );
   } catch (e) {
@@ -24,4 +24,4 @@ export const POST = withSession(async (req: Request) => {
   }
 });
 
-export const maxDuration = 60;
+export const maxDuration = 240;

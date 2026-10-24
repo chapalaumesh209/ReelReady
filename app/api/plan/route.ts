@@ -65,7 +65,7 @@ async function handlePOST(req: Request) {
         required: ["ideas", "schedulingNote", "recordBy"],
         additionalProperties: false,
       },
-      signal: AbortSignal.any([req.signal, AbortSignal.timeout(55000)]),
+      signal: AbortSignal.any([req.signal, AbortSignal.timeout(180000)]),
     };
     let plan;
     try {
@@ -99,4 +99,4 @@ async function handlePOST(req: Request) {
 
 export const POST = withSession(handlePOST);
 
-export const maxDuration = 60;
+export const maxDuration = 240;
