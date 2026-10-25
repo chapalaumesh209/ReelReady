@@ -5,6 +5,7 @@ import {
   publishPreflight,
 } from "@/lib/server/publishing/preflight";
 import { rateLimit } from "@/lib/server/rate-limit";
+export const maxDuration = 60;
 export const POST = withSession(async (req: Request) => {
   try {
     await rateLimit(req, "publish-preflight", 30);

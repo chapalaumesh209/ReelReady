@@ -20,6 +20,7 @@ import {
   hasLinks,
 } from "../../content";
 import type { PublishPreflight } from "../../publish-preflight";
+import { inspectStoredMP4 } from "../media/mp4-inspection";
 export function publicMediaURL(value: string) {
   try {
     const u = new URL(value),
@@ -63,14 +64,18 @@ export function mediaSpecIssues(
   mime: string,
 ): string[] {
   const issues: string[] = [];
-  if (
-    mime !== "video/mp4" ||
-    metadata.decoded !== true ||
-    metadata.videoCodec !== "h264" ||
-    metadata.audioCodec !== "aac"
-  )
+  const inspected =
+    metadata.decoded === true ||
+    (metadata.streamInspected === true && metadata.inspectionVersion === 1);
+  if (mime !== "video/mp4")
+    issues.push("Export this video as MP4 with H.264 video and AAC audio.");
+  else if (!inspected)
     issues.push(
-      "Use a verified MP4 with H.264 video and AAC audio. Stream inspection is required to verify codecs.",
+      "The video’s codecs could not be verified. Check publishing setup again. If this continues, export an MP4 with H.264 video and AAC audio and upload it again.",
+    );
+  else if (metadata.videoCodec !== "h264" || metadata.audioCodec !== "aac")
+    issues.push(
+      "This video needs H.264 video and AAC audio. Export an MP4 with those settings and upload it again.",
     );
   const duration = Number(metadata.duration),
     ratio = Number(metadata.width) / Number(metadata.height);
@@ -189,7 +194,16 @@ export async function publishPreflight(
         `${platform}: no connected account${demo ? "; demo is still available" : ""}.`,
       );
   }
-  const spec = mediaSpecIssues(r.data.metadata, r.data.mime);
+  let metadata = r.data.metadata;
+  if (!demo && r.data.mime === "video/mp4") {
+    try {
+      metadata = await inspectStoredMP4(r.data);
+    } catch {
+      // An unreadable/unsupported file stays blocked, but never loses its source.
+      // A fresh preflight retries transient storage failures without a worker job.
+    }
+  }
+  const spec = mediaSpecIssues(metadata, r.data.mime);
   for (const platform of data.platforms)
     for (const issue of spec)
       (platform === "instagram" && !demo

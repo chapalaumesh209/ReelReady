@@ -7,3 +7,9 @@
 5. Verify real visibility, remove the disposable posts manually, then restore DEMO_MODE=true for a public judging link if desired.
 
 Scheduling is durable inside ReelReady and depends on the long-lived worker. It never publishes before the chosen UTC instant. Signed Instagram media URLs are generated afresh during delivery. Uncertain final Instagram/X POST responses are paused for manual reconciliation, without automatic resend. Successful destinations stay intact when retrying confirmed failures.
+
+### Original MP4 inspection without the media worker
+
+Real preflight automatically reads the selected private MP4's container metadata on the server. It checks actual codec identifiers, display rotation/dimensions and duration, caches the result on that media row, and never treats browser metadata as proof. This also works for existing uploads: refresh and run **Check publishing setup** again. No re-upload is needed for an already-compatible MP4.
+
+This bounded range inspection downloads at most 4 MiB of metadata, skips large media payloads, and needs no FFmpeg worker or paid AI call. It does not decode the full recording or render/convert incompatible video. The separate `streamInspected` marker deliberately does not set `decoded`. H.264/AAC, 9:16 and duration checks still apply. Unsupported containers/codecs or an incomplete inspection remain blocked; export a standard MP4 or retry a transient storage failure. Voiceovers and transcoding still require the media worker.

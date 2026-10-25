@@ -998,3 +998,87 @@ test("production never exposes sample shortcuts, even if sample output is accide
       else process.env[key] = value;
   }
 });
+
+test("real Instagram preflight inspects stored MP4 metadata without a worker and caches the result", async () => {
+  const oldMode = process.env.DEMO_MODE;
+  const oldFetch = globalThis.fetch;
+  let rangedReads = 0;
+  try {
+    process.env.DEMO_MODE = "false";
+    // Browser metadata is deliberately wrong. Only the stored bytes can verify it.
+    await admin
+      .from("reelready_media")
+      .update({ metadata: { duration: 80, width: 1920, height: 1080 } })
+      .eq("id", sourceId);
+    globalThis.fetch = async (url, init) => {
+      if (new Headers(init?.headers).has("range")) rangedReads++;
+      return oldFetch(url, init);
+    };
+    const input = preflightInput.parse({
+      draftId: reelId,
+      assetToken,
+      platforms: ["instagram"],
+      scheduledAt: null,
+      instagram: "An original animation",
+      youtubeTitle: "Animation",
+      youtubeDescription: "An original animation",
+      x: "An original animation",
+      language: "English",
+      dubbed: false,
+      size: 1000,
+      duration: 80,
+      width: 1920,
+      height: 1080,
+    });
+    const report = await publishPreflight(req(), input);
+    assert.ok(
+      report.blockers.every(
+        (x) => !/codecs|H.264|AAC|portrait|5 to 90/.test(x),
+      ),
+      JSON.stringify(report.blockers),
+    );
+    assert.ok(rangedReads > 0, "Must read actual stored bytes");
+    const stored = (
+      await admin
+        .from("reelready_media")
+        .select("metadata")
+        .eq("id", sourceId)
+        .single()
+    ).data!.metadata;
+    assert.equal(stored.streamInspected, true);
+    assert.equal(stored.videoCodec, "h264");
+    assert.equal(stored.audioCodec, "aac");
+    assert.equal(stored.duration, 8);
+    assert.equal(stored.width, 360);
+    assert.equal(stored.height, 640);
+    assert.notEqual(
+      stored.decoded,
+      true,
+      "Container inspection must not claim full decoding",
+    );
+    const count = rangedReads;
+    await publishPreflight(req(), input);
+    assert.equal(
+      rangedReads,
+      count,
+      "Verified metadata should be cached for this asset",
+    );
+    assert.equal(
+      (
+        await admin
+          .from("reelready_media")
+          .select("path")
+          .eq("id", sourceId)
+          .single()
+      ).data!.path,
+      path,
+    );
+  } finally {
+    globalThis.fetch = oldFetch;
+    process.env.DEMO_MODE = oldMode;
+    await admin
+      .from("reelready_media")
+      .update({ metadata: meta })
+      .eq("id", sourceId);
+  }
+});
