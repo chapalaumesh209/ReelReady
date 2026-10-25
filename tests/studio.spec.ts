@@ -918,3 +918,36 @@ test("voiceover quota errors keep words and offer original continuation (mocked 
     "Keep this exact script saved while the service is unavailable.",
   );
 });
+
+test("live entry ignores sample links and offers no canned example shortcuts", async ({
+  page,
+}) => {
+  await page.route("**/api/limits", (route) =>
+    route.fulfill({
+      json: { maxUploadMB: 200, maxVideoSeconds: 90, samplesAvailable: false },
+    }),
+  );
+  await page.goto("/?sample=judge");
+  await expect(
+    page.getByRole("textbox", { name: "Your reel idea", exact: true }),
+  ).toHaveValue("");
+  await expect(
+    page.getByRole("button", { name: "Try an example", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Use a sample video", exact: true }),
+  ).toHaveCount(0);
+  await expect(page).not.toHaveURL(/sample=/);
+  await page.screenshot({
+    path: "artifacts/live-entry-no-samples-desktop.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    page.getByRole("button", { name: "Generate reel ideas", exact: true }),
+  ).toBeEnabled();
+  await page.screenshot({
+    path: "artifacts/live-entry-no-samples-mobile.png",
+    fullPage: true,
+  });
+});

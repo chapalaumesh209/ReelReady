@@ -60,3 +60,7 @@ The Audio & Voice subflow replaces content in place: initial sound choice → wo
 ## Duration and voice choices (latest request)
 
 Keep the progressive Audio & Voice flow. The English task adds only three relevant labelled native selects: voice presentation (natural automatic / male / female), accent (US / British / Indian English), and delivery (natural / casual / friendly / professional). All sit inside the existing words task; Change voice or words reopens it after completion. Labels sit outside select elements so option text never becomes the label. A read-only narration disclosure identifies the measured fitted duration; no manual timeline, sliders or extra page returns.
+
+## Live production content
+
+The production flow offers no sample idea/video shortcuts and ignores sample URL seeds. Those shortcuts appear only when the server explicitly allows sample output and demo publishing together. Real writing, analysis and captions never silently substitute canned content. Existing creator drafts remain preserved. No visual tokens or workflow stages change.

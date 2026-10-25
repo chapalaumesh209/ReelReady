@@ -48,11 +48,20 @@ async function toUpload(page: Page) {
     .getByRole("button", { name: "I’ve recorded it", exact: false })
     .click();
 }
-async function toReview(page: Page) {
+async function toReview(page: Page, realMode = false) {
   await toUpload(page);
-  await page
-    .getByRole("button", { name: "Use a sample video", exact: true })
-    .click();
+  if (realMode) {
+    await expect(
+      page.getByRole("button", { name: "Use a sample video", exact: true }),
+    ).toHaveCount(0);
+    await page
+      .getByLabel("Choose recording")
+      .setInputFiles("public/samples/reelready-demo.mp4");
+  } else {
+    await page
+      .getByRole("button", { name: "Use a sample video", exact: true })
+      .click();
+  }
   await expect(
     page.getByText("Recording uploaded and saved privately", { exact: false }),
   ).toBeVisible({ timeout: 30000 });
@@ -410,7 +419,7 @@ test("real publishing has no PIN field and preserves the final confirmation (moc
       },
     });
   });
-  await toReview(page);
+  await toReview(page, true);
   const caption = page.getByRole("textbox", {
     name: "Instagram caption",
     exact: true,

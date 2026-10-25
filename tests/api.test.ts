@@ -210,6 +210,7 @@ test("slow generation retries within the longer provider window without cancelli
     oldTimeout = AbortSignal.timeout;
   const env = { ...process.env };
   const windows: number[] = [];
+  const timeouts: AbortController[] = [];
   let calls = 0;
   const parent = new AbortController();
   try {
@@ -220,11 +221,7 @@ test("slow generation retries within the longer provider window without cancelli
       windows.push(ms);
       if (ms !== 45000) return oldTimeout(ms);
       const controller = new AbortController();
-      setTimeout(
-        () =>
-          controller.abort(new DOMException("slow provider", "TimeoutError")),
-        20,
-      );
+      timeouts.push(controller);
       return controller.signal;
     };
     globalThis.fetch = async (input, init) => {
@@ -237,6 +234,15 @@ test("slow generation retries within the longer provider window without cancelli
             "abort",
             () => reject(init!.signal!.reason),
             { once: true },
+          );
+          // Arm the simulated provider timeout after its listener exists. A real
+          // database budget lookup can take longer under parallel build load.
+          setTimeout(
+            () =>
+              timeouts[0].abort(
+                new DOMException("slow provider", "TimeoutError"),
+              ),
+            20,
           );
         });
       return Response.json({

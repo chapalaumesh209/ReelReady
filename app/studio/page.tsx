@@ -100,6 +100,7 @@ export default function Home() {
       accounts: {},
     }),
     [connectionLoaded, setConnectionLoaded] = useState(false),
+    [samplesEnabled, setSamplesEnabled] = useState(false),
     [revision, setRevision] = useState(""),
     [preflight, setPreflight] = useState<
       import("@/lib/publish-preflight").PublishPreflight | null
@@ -170,6 +171,22 @@ export default function Home() {
     (async () => {
       const restored = fresh();
       const params = new URLSearchParams(location.search);
+      const runtime = await fetch("/api/limits", {
+        signal: AbortSignal.timeout(8000),
+      })
+        .then((r) => responseJSON<{ samplesAvailable?: boolean }>(r))
+        .catch(() => ({ samplesAvailable: false }));
+      const samplesAvailable = runtime.samplesAvailable === true;
+      if (cancelled) return;
+      setSamplesEnabled(samplesAvailable);
+      if (!samplesAvailable && params.has("sample")) {
+        params.delete("sample");
+        history.replaceState(
+          {},
+          "",
+          `${location.pathname}${params.size ? `?${params}` : ""}`,
+        );
+      }
       let chosen = params.get("id") || params.get("new");
       // Resume the current reel in this browser; an explicit new/sample URL starts fresh.
       if (!chosen && !params.has("sample")) {
@@ -542,7 +559,7 @@ export default function Home() {
     }
   }
   async function attachSampleVideo() {
-    if (busy) return;
+    if (busy || !samplesEnabled || !connections.demo) return;
     try {
       const r = await fetch("/samples/reelready-demo.mp4");
       if (!r.ok)
@@ -1203,18 +1220,20 @@ export default function Home() {
                         <Mic size={14} /> Enter to generate · Shift+Enter for a
                         new line
                       </span>
-                      <button
-                        type="button"
-                        className="text-button"
-                        onClick={() =>
-                          patch({
-                            input: sampleIdeas.food,
-                            languages: ["English", "Telugu"],
-                          })
-                        }
-                      >
-                        Try an example
-                      </button>
+                      {samplesEnabled && connections.demo && (
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() =>
+                            patch({
+                              input: sampleIdeas.food,
+                              languages: ["English", "Telugu"],
+                            })
+                          }
+                        >
+                          Try an example
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="plan-destinations">
@@ -1644,15 +1663,17 @@ export default function Home() {
                       )}
                   </div>
                 )}
-                <div className="sample-shortcut">
-                  <span>Just trying it out?</span>
-                  <button
-                    className="text-button"
-                    onClick={() => void attachSampleVideo()}
-                  >
-                    Use a sample video
-                  </button>
-                </div>
+                {samplesEnabled && connections.demo && (
+                  <div className="sample-shortcut">
+                    <span>Just trying it out?</span>
+                    <button
+                      className="text-button"
+                      onClick={() => void attachSampleVideo()}
+                    >
+                      Use a sample video
+                    </button>
+                  </div>
+                )}
                 <details className="flow-options">
                   <summary>
                     Add recording notes <span>Optional</span>

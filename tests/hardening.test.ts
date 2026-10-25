@@ -961,3 +961,40 @@ test("real preflight rejects captions bound to another selected video", async ()
     process.env.DEMO_MODE = "true";
   }
 });
+
+test("production never exposes sample shortcuts, even if sample output is accidentally allowed", async () => {
+  const { GET: limits } = await import("../app/api/limits/route");
+  const before = {
+    demo: process.env.DEMO_MODE,
+    sample: process.env.ALLOW_SAMPLE_OUTPUT,
+  };
+  try {
+    process.env.DEMO_MODE = "false";
+    process.env.ALLOW_SAMPLE_OUTPUT = "true";
+    assert.equal(
+      ((await (await limits()).json()) as { samplesAvailable: boolean })
+        .samplesAvailable,
+      false,
+    );
+    process.env.DEMO_MODE = "true";
+    process.env.ALLOW_SAMPLE_OUTPUT = "false";
+    assert.equal(
+      ((await (await limits()).json()) as { samplesAvailable: boolean })
+        .samplesAvailable,
+      false,
+    );
+    process.env.ALLOW_SAMPLE_OUTPUT = "true";
+    assert.equal(
+      ((await (await limits()).json()) as { samplesAvailable: boolean })
+        .samplesAvailable,
+      true,
+    );
+  } finally {
+    for (const [key, value] of Object.entries({
+      DEMO_MODE: before.demo,
+      ALLOW_SAMPLE_OUTPUT: before.sample,
+    }))
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+  }
+});
