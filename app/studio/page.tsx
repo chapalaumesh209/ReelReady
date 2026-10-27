@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { createDraftAutosave, sendDraft } from "@/lib/draft-autosave";
 import {
   ArrowRight,
   ArrowLeft,
@@ -123,6 +124,10 @@ export default function Home() {
     return () => clearInterval(timer);
   }, []);
   const localDraftPresent = useRef(false);
+  const hydrationFailure = useRef("");
+  const autosaver = useRef<ReturnType<
+    typeof createDraftAutosave<Draft>
+  > | null>(null);
   const connectionReturnPending = useRef(false);
   const controller = useRef<AbortController | null>(null),
     operation = useRef(false),
@@ -189,12 +194,17 @@ export default function Home() {
       }
       let chosen = params.get("id") || params.get("new");
       // Resume the current reel in this browser; an explicit new/sample URL starts fresh.
-      if (!chosen && !params.has("sample")) {
+      if (!params.has("new") && !params.has("sample")) {
         try {
           const cached = JSON.parse(
             localStorage.getItem(key) || "null",
           ) as Draft | null;
-          if (cached?.version === 2 && /^[a-f0-9-]{36}$/.test(cached.id)) {
+          if (
+            cached?.version === 2 &&
+            /^[a-f0-9-]{36}$/.test(cached.id) &&
+            (!chosen || chosen === cached.id)
+          ) {
+            localDraftPresent.current = true;
             Object.assign(restored, fresh(), cached);
             restored.step =
               !cached.workflowVersion && cached.step >= 3
@@ -233,29 +243,49 @@ export default function Home() {
     queueMicrotask(() => void refreshConnections());
     const handleFocus = () => {
       void refreshConnections();
+      setSaveRetry((n) => n + 1);
     };
     window.addEventListener("focus", handleFocus);
+    window.addEventListener("online", handleFocus);
     return () => {
       cancelled = true;
       controller.current?.abort();
       window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("online", handleFocus);
     };
   }, []);
   useEffect(() => {
-    if (ready)
+    if (
+      ready &&
+      (cloudHydrated ||
+        localDraftPresent.current ||
+        !new URLSearchParams(location.search).has("id"))
+    )
       try {
         localStorage.setItem(key, JSON.stringify(draft));
       } catch {
         queueMicrotask(() => setStorageWarning(true));
       }
-  }, [draft, ready]);
+  }, [draft, ready, cloudHydrated]);
   useEffect(() => {
     if (!connectionLoaded) return;
-    void fetch("/api/storage")
+    let alive = true;
+    void fetch("/api/storage", { signal: AbortSignal.timeout(15000) })
       .then((r) => responseJSON<{ configured: boolean }>(r))
-      .then((s) => setCloudAvailable(s.configured))
-      .catch(() => setCloudAvailable(false));
-  }, [connectionLoaded]);
+      .then((s) => {
+        if (alive) setCloudAvailable(s.configured);
+      })
+      .catch(() => {
+        if (alive) {
+          setCloudAvailable(false);
+          setCloudSave("local");
+          setSaveFailed(true);
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [connectionLoaded, saveRetry]);
   useEffect(() => {
     let alive = true;
     let localURL = "";
@@ -313,16 +343,13 @@ export default function Home() {
     };
   }, [dubbed, draft.englishAsset]);
   useEffect(() => {
-    if (cloudAvailable === false) {
-      queueMicrotask(() => setCloudHydrated(true));
-      return;
-    }
     if (!ready || !cloudAvailable) return;
     let alive = true;
     void fetch(
       new URLSearchParams(location.search).get("id")
         ? `/api/reels?id=${encodeURIComponent(new URLSearchParams(location.search).get("id")!)}`
         : "/api/preferences",
+      { signal: AbortSignal.timeout(15000) },
     )
       .then((r) =>
         responseJSON<{
@@ -365,53 +392,54 @@ export default function Home() {
           });
         }
       })
-      .catch((e) => {
-        if (alive) setError(e.message);
+      .then(() => {
+        if (alive) {
+          setCloudHydrated(true);
+          const previousFailure = hydrationFailure.current;
+          if (previousFailure)
+            setError((current) => (current === previousFailure ? "" : current));
+          hydrationFailure.current = "";
+        }
       })
-      .finally(() => {
-        if (alive) setCloudHydrated(true);
+      .catch((e) => {
+        if (alive) {
+          hydrationFailure.current = e.message;
+          setError(e.message);
+          // Never save a fresh empty shell over an existing cloud-only reel.
+          setCloudHydrated(localDraftPresent.current);
+          setSaveFailed(true);
+        }
       });
     return () => {
       alive = false;
     };
-  }, [ready, cloudAvailable]);
+  }, [ready, cloudAvailable, saveRetry]);
   useEffect(() => {
     if (!ready || !cloudAvailable || !cloudHydrated) return;
-    const controller = new AbortController();
-    queueMicrotask(() => {
-      if (!controller.signal.aborted) {
-        setCloudSave("saving");
-        setSaveFailed(false);
-      }
+    const saver = createDraftAutosave<Draft>({
+      send: sendDraft,
+      onStatus: (status) => {
+        setCloudSave(status);
+        setSaveFailed(status === "local");
+      },
+      onSaved: (saved) => {
+        const params = new URLSearchParams(location.search);
+        if (!params.has("id") || params.has("new") || params.has("sample"))
+          history.replaceState({}, "", `/?id=${saved.id}`);
+      },
     });
-    const timer = setTimeout(() => {
-      void fetch("/api/draft", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state: draft }),
-        signal: controller.signal,
-      })
-        .then((r) => {
-          if (!r.ok) throw new Error();
-          if (!controller.signal.aborted) {
-            setCloudSave("saved");
-            const params = new URLSearchParams(location.search);
-            if (!params.has("id") || params.has("new") || params.has("sample"))
-              history.replaceState({}, "", `/?id=${draft.id}`);
-          }
-        })
-        .catch(() => {
-          if (!controller.signal.aborted) {
-            setCloudSave("local");
-            setSaveFailed(true);
-          }
-        });
-    }, 1200);
+    autosaver.current = saver;
     return () => {
-      clearTimeout(timer);
-      controller.abort();
+      saver.dispose();
+      autosaver.current = null;
     };
-  }, [draft, ready, cloudAvailable, cloudHydrated, saveRetry]);
+  }, [ready, cloudAvailable, cloudHydrated]);
+  useEffect(() => {
+    autosaver.current?.submit(draft);
+  }, [draft, ready, cloudAvailable, cloudHydrated]);
+  useEffect(() => {
+    autosaver.current?.retry();
+  }, [saveRetry]);
   const hasOriginal = !!original || !!draft.originalAsset;
   const preview =
     draft.variant === "english"

@@ -33,6 +33,7 @@ Video selection uses a visible native file input styled through ::file-selector-
 Publish and disconnect use the shared native modal dialog wrapper with initial focus on the safe action, native focus containment/Escape behavior, and focus restoration. The current reel resumes at its stable URL and in this browser. Demo publication remains visibly labelled.
 
 ## Audio & Voice extension
+
 The sixth-stage workflow inserts Audio & Voice between Upload and Review. Reuse the existing panel, native selects, AutoTextarea, inline feedback and ConfirmDialog. Keep the original-audio decision first and progressively reveal narration only when selected. The source preview and measured stream summary remain visible; optional voice-note and source-separation explanations use native details. No replacement of the established lavender identity. Native range controls own volume/fade input; labelled numeric fields own timing. Media preview uses anonymous CORS with owner-authorized signed URLs. Source audio information is explicitly labelled Original so it cannot be mistaken for rendered metadata.
 
 ## Caption strategy refinement
@@ -64,3 +65,7 @@ Keep the progressive Audio & Voice flow. The English task adds only three releva
 ## Live production content
 
 The production flow offers no sample idea/video shortcuts and ignores sample URL seeds. Those shortcuts appear only when the server explicitly allows sample output and demo publishing together. Real writing, analysis and captions never silently substitute canned content. Existing creator drafts remain preserved. No visual tokens or workflow stages change.
+
+## Draft recovery
+
+The single-flow editor owns autosave through `lib/draft-autosave.ts`. Keep one request in flight and queue the latest snapshot. Temporary network/server conflicts retry automatically with bounded backoff; manual retry, browser focus and restored connectivity resume pending work. A matching browser draft takes priority when reopening its link. Failed hydration of a cloud-only reel must never persist or upload an empty shell. The existing save status and inline Retry saving control remain the canonical feedback; no new navigation, settings or visual tokens are introduced.

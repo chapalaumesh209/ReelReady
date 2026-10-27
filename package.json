@@ -13,7 +13,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit",
-    "test:unit": "node --env-file=.env.test.local --import tsx --import ./tests/provider-budget-isolation.mjs --test --test-concurrency=1 tests/api.test.ts tests/workflow.test.ts tests/captions.test.ts tests/hardening.test.ts tests/native-social.test.ts tests/n8n.test.ts tests/managed-publishing.test.ts tests/media-runtime.test.ts tests/hf-hosting.test.mjs tests/mp4-inspection.test.ts",
+    "test:unit": "node --env-file=.env.test.local --import tsx --import ./tests/provider-budget-isolation.mjs --test --test-concurrency=1 tests/api.test.ts tests/workflow.test.ts tests/captions.test.ts tests/hardening.test.ts tests/native-social.test.ts tests/n8n.test.ts tests/managed-publishing.test.ts tests/media-runtime.test.ts tests/hf-hosting.test.mjs tests/mp4-inspection.test.ts tests/draft-autosave.test.ts",
     "test:e2e": "node --env-file=.env.test.local node_modules/@playwright/test/cli.js test",
     "dev:sites": "node scripts/run-framework.mjs dev",
     "build:sites": "node scripts/run-framework.mjs build",

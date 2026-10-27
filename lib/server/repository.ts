@@ -23,14 +23,23 @@ export async function ensureReel(req: Request, id: string) {
     .maybeSingle();
   if (found.error) databaseError(found.error);
   if (!found.data) {
-    const created = await db
-      .from("reelready_reels")
-      .insert({
-        id,
-        owner_id: user.id,
-        state: { id, version: 2, step: 0 },
-        title: "Untitled reel",
-      });
+    const created = await db.from("reelready_reels").insert({
+      id,
+      owner_id: user.id,
+      state: { id, version: 2, step: 0 },
+      title: "Untitled reel",
+    });
+    if (created.error?.code === "23505") {
+      // Two authorized actions can create the same new reel concurrently.
+      // Recheck through RLS; a foreign workspace must never be adopted.
+      const raced = await db
+        .from("reelready_reels")
+        .select("id")
+        .eq("id", id)
+        .maybeSingle();
+      if (raced.error) databaseError(raced.error);
+      if (raced.data) return { db, user };
+    }
     if (created.error)
       throw new GenerationError(
         "This reel could not be opened in your workspace. Start a new reel and try again.",

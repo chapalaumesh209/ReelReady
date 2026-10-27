@@ -951,3 +951,125 @@ test("live entry ignores sample links and offers no canned example shortcuts", a
     fullPage: true,
   });
 });
+
+test("cloud autosave retries a temporary failure and preserves unsaved multilingual edits through reload", async ({
+  page,
+}) => {
+  await page.goto("/?new=1");
+  const box = page.getByRole("textbox", {
+    name: "Your reel idea",
+    exact: true,
+  });
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  let failed = false;
+  await page.route("**/api/draft", (route) => {
+    if (route.request().method() === "POST" && !failed) {
+      failed = true;
+      return route.abort("failed");
+    }
+    return route.continue();
+  });
+  const words = "నా పొదుపు ఆలోచన — मेरी कहानी — keep my latest words.";
+  await box.fill(words);
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible({
+    timeout: 20000,
+  });
+  expect(failed).toBe(true);
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("reelready.flow.v2")!),
+  );
+  expect(
+    (await (await page.request.get(`/api/reels?id=${saved.id}`)).json()).state
+      .input,
+  ).toBe(words);
+  await page.route("**/api/draft", (route) =>
+    route.fulfill({ status: 503, json: { error: "Temporary outage" } }),
+  );
+  const latest = words + " Unsaved offline edit.";
+  await box.fill(latest);
+  await expect
+    .poll(
+      async () =>
+        await page.evaluate(
+          () => JSON.parse(localStorage.getItem("reelready.flow.v2")!).input,
+        ),
+    )
+    .toBe(latest);
+  await page.route("**/api/reels?*", (route) =>
+    route.fulfill({ status: 503, json: { error: "Temporary outage" } }),
+  );
+  await page.reload();
+  await expect(box).toHaveValue(latest);
+  await page.unroute("**/api/draft");
+  await page.unroute("**/api/reels?*");
+  // Recovering connectivity triggers a fresh storage check and queued save.
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible({
+    timeout: 20000,
+  });
+  expect(
+    (await (await page.request.get(`/api/reels?id=${saved.id}`)).json()).state
+      .input,
+  ).toBe(latest);
+  await page.screenshot({
+    path: "artifacts/autosave-recovered-desktop.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(box).toHaveValue(latest);
+  await page.screenshot({
+    path: "artifacts/autosave-recovered-mobile.png",
+    fullPage: false,
+  });
+});
+
+test("failed cloud hydration without a matching browser copy cannot overwrite a saved reel", async ({
+  page,
+}) => {
+  await page.goto("/?new=1");
+  const box = page.getByRole("textbox", {
+    name: "Your reel idea",
+    exact: true,
+  });
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await box.fill("Preserve this cloud-only reel.");
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("reelready.flow.v2")!),
+  );
+  await page.evaluate(() => localStorage.removeItem("reelready.flow.v2"));
+  let writes = 0;
+  await page.route("**/api/draft", (route) => {
+    writes++;
+    return route.continue();
+  });
+  await page.route("**/api/reels?*", (route) =>
+    route.fulfill({ status: 503, json: { error: "Temporary outage" } }),
+  );
+  await page.reload();
+  await expect(
+    page.getByText("Temporary outage", { exact: true }),
+  ).toBeVisible();
+  await expect(box).toHaveValue("");
+  await page.waitForTimeout(1800);
+  expect(writes).toBe(0);
+  expect(
+    await page.evaluate(() => localStorage.getItem("reelready.flow.v2")),
+  ).toBeNull();
+  await page.reload();
+  await expect(
+    page.getByText("Temporary outage", { exact: true }),
+  ).toBeVisible();
+  expect(writes).toBe(0);
+  await page.unroute("**/api/reels?*");
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await expect(box).toHaveValue("Preserve this cloud-only reel.");
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await expect(page.getByText("Temporary outage", { exact: true })).toHaveCount(
+    0,
+  );
+  expect(
+    (await (await page.request.get(`/api/reels?id=${saved.id}`)).json()).state
+      .input,
+  ).toBe("Preserve this cloud-only reel.");
+});

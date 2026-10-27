@@ -836,3 +836,30 @@ test("creator preferences persist explicitly and old reel autosaves never overwr
   ).json()) as { details: { brand: string } };
   assert.notEqual(other.details.brand, details.brand);
 });
+
+test("concurrent first saves keep the owning workspace and reject foreign IDs", async () => {
+  const { ensureReel } = await import("../lib/server/repository");
+  const id = crypto.randomUUID();
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () => ensureReel(request(alice.token), id)),
+    );
+    assert.ok(results.every((x) => x.user.id === alice.id));
+    await assert.rejects(
+      () => ensureReel(request(bob.token), id),
+      /could not be opened/,
+    );
+    const row = await admin
+      .from("reelready_reels")
+      .select("owner_id")
+      .eq("id", id)
+      .single();
+    assert.equal(row.data!.owner_id, alice.id);
+  } finally {
+    await admin
+      .from("reelready_reels")
+      .delete()
+      .eq("id", id)
+      .eq("owner_id", alice.id);
+  }
+});
