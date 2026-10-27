@@ -16,6 +16,10 @@ import {
 } from "@/lib/audio/schema";
 import { rateLimit } from "@/lib/server/rate-limit";
 import { GenerationError } from "@/lib/generation";
+import {
+  speechCooldown,
+  speechCooldownMessage,
+} from "@/lib/server/media/speech-capacity";
 export const GET = withSession(async (req: Request) => {
   try {
     const reelId = z
@@ -31,12 +35,18 @@ export const GET = withSession(async (req: Request) => {
       .order("created_at", { ascending: false });
     if (media.error) databaseError(media.error);
     const worker = await workerStatus();
+    const cooldown = process.env.GEMINI_API_KEY ? await speechCooldown() : null;
     return json({
       state,
       assets: media.data,
       workerReady: worker.status === "online",
       speechReady:
-        !!process.env.GEMINI_API_KEY && process.env.TTS_PROVIDER !== "disabled",
+        !!process.env.GEMINI_API_KEY &&
+        process.env.TTS_PROVIDER !== "disabled" &&
+        !cooldown,
+      speechUnavailableReason: cooldown
+        ? speechCooldownMessage(cooldown)
+        : undefined,
       transcriptionReady:
         !!process.env.GEMINI_API_KEY &&
         process.env.SPEECH_TO_TEXT_PROVIDER !== "disabled",

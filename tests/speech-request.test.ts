@@ -1,9 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  requestSpeech,
+  requestSpeech as performSpeech,
   speechRateLimit,
 } from "../lib/server/media/speech-request";
+const requestSpeech: typeof performSpeech = (
+  payload,
+  headers,
+  options,
+  runtime = {},
+) =>
+  performSpeech(payload, headers, options, {
+    cooldown: async () => null,
+    block: async () => {},
+    ...runtime,
+  });
 const quota = (id: string, value = "3") => ({
   error: {
     details: [
@@ -84,7 +95,7 @@ test("daily and zero-allowance limits stop immediately without retrying or prete
             },
           },
         ),
-      /daily or plan quota/,
+      /daily allowance/,
     );
     assert.equal(calls, 1);
     assert.equal(waits, 0);
@@ -226,7 +237,7 @@ test("long provider cooldowns are reported rather than shortened, and RetryInfo 
           },
         },
       ),
-    /still busy/,
+    /temporarily limiting/,
   );
   assert.equal(calls, 1);
   assert.equal(waits, 0);
@@ -255,4 +266,88 @@ test("long provider cooldowns are reported rather than shortened, and RetryInfo 
   );
   assert.equal(calls, 4);
   assert.equal(waits, 3);
+});
+
+test("the live Interactions free-tier message is a daily quota, persists its cooldown, and blocks another paid request", async () => {
+  const now = Date.parse("2026-10-27T10:30:00Z");
+  let cooldown: { until: string; daily: boolean } | null = null;
+  let calls = 0,
+    budgets = 0;
+  const runtime = {
+    now: () => now,
+    cooldown: async () => cooldown,
+    block: async (value: { until: string; daily: boolean }) => {
+      cooldown = value;
+    },
+    budget: async () => {
+      budgets++;
+    },
+    fetch: async () => {
+      calls++;
+      return Response.json(
+        {
+          error: {
+            code: "too_many_requests",
+            message:
+              "Rate limit exceeded (limit: 10 requests per day on Free Tier).",
+          },
+        },
+        { status: 429, headers: { "retry-after": "73946" } },
+      );
+    },
+  };
+  await assert.rejects(
+    () => requestSpeech({}, {}, {}, runtime),
+    /daily allowance.*IST/,
+  );
+  assert.deepEqual(cooldown, {
+    until: new Date(now + 73946000).toISOString(),
+    daily: true,
+  });
+  await assert.rejects(
+    () => requestSpeech({}, {}, {}, runtime),
+    /daily allowance/,
+  );
+  assert.equal(calls, 1);
+  assert.equal(budgets, 1);
+});
+test("speech socket failures retry with bounds and preserve completed work on final failure", async () => {
+  let calls = 0;
+  const waits: number[] = [];
+  await requestSpeech(
+    {},
+    {},
+    {},
+    {
+      budget: async () => {},
+      pause: async (n) => {
+        waits.push(n);
+      },
+      fetch: async () => {
+        if (++calls === 1) throw new TypeError("fetch failed");
+        return Response.json({ ok: true });
+      },
+    },
+  );
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [2000]);
+  calls = 0;
+  await assert.rejects(
+    () =>
+      requestSpeech(
+        {},
+        {},
+        {},
+        {
+          budget: async () => {},
+          pause: async () => {},
+          fetch: async () => {
+            calls++;
+            throw new TypeError("fetch failed");
+          },
+        },
+      ),
+    /connection was interrupted.*completed voice segments are saved/,
+  );
+  assert.equal(calls, 4);
 });

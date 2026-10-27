@@ -7,6 +7,7 @@ const { workerStatus } = await import("../lib/server/media/status");
 const { publicLimits, positiveEnv } = await import("../lib/server/hardening");
 const { demoMode } = await import("../lib/server/config");
 const { providerCapacity } = await import("../lib/server/provider-budget");
+const { speechCooldown } = await import("../lib/server/media/speech-capacity");
 const { publicMediaURL } = await import("../lib/server/publishing/preflight");
 const { socialConfiguration } = await import("../lib/server/social/config");
 const {
@@ -16,12 +17,10 @@ const {
   providerWebhookBase,
   binaryMediaTransfer,
 } = await import("../lib/server/provider/config");
-const { publishExecutor, publisherBridgeConfiguration } = await import(
-  "../lib/server/automation/config"
-);
-const { publishingExecutorStatus } = await import(
-  "../lib/server/automation/status"
-);
+const { publishExecutor, publisherBridgeConfiguration } =
+  await import("../lib/server/automation/config");
+const { publishingExecutorStatus } =
+  await import("../lib/server/automation/status");
 const socialEncryptionConfigured =
   Buffer.from(process.env.SOCIAL_TOKEN_ENCRYPTION_KEY || "", "base64")
     .length === 32;
@@ -94,14 +93,20 @@ if (!demo) {
           : "Configure official platform application credentials and SOCIAL_TOKEN_ENCRYPTION_KEY before real posting.",
     );
 }
-const [worker, capacity, publishingExecutor] = await Promise.all([
-  workerStatus(),
-  providerCapacity().catch(() => false),
-  publishingExecutorStatus().catch(() => ({
-    executor: "invalid",
-    status: "offline",
-  })),
-]);
+const [worker, capacity, publishingExecutor, speechAvailable] =
+  await Promise.all([
+    workerStatus(),
+    providerCapacity().catch(() => false),
+    publishingExecutorStatus().catch(() => ({
+      executor: "invalid",
+      status: "offline",
+    })),
+    process.env.GEMINI_API_KEY
+      ? speechCooldown()
+          .then((x) => !x)
+          .catch(() => false)
+      : false,
+  ]);
 console.log(
   JSON.stringify(
     {
@@ -122,7 +127,8 @@ console.log(
       voice:
         process.env.GEMINI_API_KEY &&
         process.env.TTS_PROVIDER !== "disabled" &&
-        capacity
+        capacity &&
+        speechAvailable
           ? "live (requires worker)"
           : sampleOutputsAllowed()
             ? "sample / keep original"

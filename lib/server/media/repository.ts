@@ -64,6 +64,24 @@ export async function audioState(
 export async function editHash(state: unknown) {
   return digest(JSON.stringify(editSchema.parse(state)));
 }
+export async function mediaRequestFingerprint(
+  ownerId: string,
+  reelId: string,
+  sourceId: string,
+  kind: string,
+  requestId: string,
+) {
+  return digest(
+    JSON.stringify({
+      ownerId,
+      reelId,
+      sourceId,
+      kind,
+      requestId,
+      pool: workerPool(),
+    }),
+  );
+}
 export async function enqueue(
   req: Request,
   reelId: string,
@@ -71,13 +89,16 @@ export async function enqueue(
   kind: string,
   payload: Record<string, unknown>,
   retry = false,
+  requestId?: string,
 ) {
   const { asset, user } = await ownedMedia(req, sourceId, reelId);
   if (!["transcribe", "analyze"].includes(kind) && asset.kind !== "original")
     throw new GenerationError("This operation needs the original video.", 400);
-  const fingerprint = await digest(
-    JSON.stringify({ kind, sourceId, payload, pool: workerPool() }),
-  );
+  const fingerprint = requestId
+    ? await mediaRequestFingerprint(user.id, reelId, sourceId, kind, requestId)
+    : await digest(
+        JSON.stringify({ kind, sourceId, payload, pool: workerPool() }),
+      );
   const r = await storageAdmin().rpc("reelready_enqueue_media_job", {
     p_owner: user.id,
     p_reel: reelId,
@@ -85,7 +106,7 @@ export async function enqueue(
     p_kind: kind,
     p_fingerprint: fingerprint,
     p_payload: payload,
-    p_retry: retry,
+    p_retry: requestId ? false : retry,
     p_user_cap: positiveEnv("MAX_ACTIVE_JOBS_PER_USER", 2),
     p_global_cap: positiveEnv("MAX_QUEUED_JOBS", 100),
     p_pool: workerPool(),

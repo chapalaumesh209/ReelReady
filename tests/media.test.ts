@@ -22,6 +22,7 @@ import { storageAdmin, ensureVideoBucket, VIDEO_BUCKET } from "../lib/supabase";
 import { audioState, editHash, enqueue } from "../lib/server/media/repository";
 import { POST as audioPost } from "../app/api/audio/route";
 import { POST as generateJob } from "../app/api/voiceover/generate/route";
+import { POST as englishJob } from "../app/api/media/english/route";
 import { GET as assetsGet } from "../app/api/media/assets/route";
 import { GET as jobsGet } from "../app/api/media/jobs/route";
 import {
@@ -37,6 +38,11 @@ import {
 } from "../lib/server/media/narration";
 import { voiceFingerprint } from "../lib/server/media/worker";
 import { synthesize, transcribe } from "../lib/server/media/providers";
+import {
+  speechCooldown,
+  recordSpeechCooldown,
+} from "../lib/server/media/speech-capacity";
+import { digest } from "../lib/server";
 let dir: string,
   silent: string,
   sound: string,
@@ -1067,20 +1073,18 @@ test("fitted worker uses original speech plus creator changes, repairs long spee
     ...(await workerJob("english", initial)),
     source_id: newSourceId,
   };
-  const queued = await admin
-    .from("reelready_media_jobs")
-    .insert({
-      id: leased.id,
-      owner_id: alice.id,
-      reel_id: reelId,
-      source_id: newSourceId,
-      kind: "english",
-      status: "running",
-      lease_token: leased.lease_token,
-      fingerprint: crypto.randomUUID(),
-      payload: leased.payload,
-      pool: `fitting-test-${crypto.randomUUID()}`,
-    });
+  const queued = await admin.from("reelready_media_jobs").insert({
+    id: leased.id,
+    owner_id: alice.id,
+    reel_id: reelId,
+    source_id: newSourceId,
+    kind: "english",
+    status: "running",
+    lease_token: leased.lease_token,
+    fingerprint: crypto.randomUUID(),
+    payload: leased.payload,
+    pool: `fitting-test-${crypto.randomUUID()}`,
+  });
   assert.equal(queued.error, null);
   const fitted = await processJob(leased, {
     transcribe: async () => {
@@ -1193,4 +1197,143 @@ test("fitted worker uses original speech plus creator changes, repairs long spee
   });
   const original = await admin.storage.from(VIDEO_BUCKET).download(path);
   assert.deepEqual(Buffer.from(await original.data!.arrayBuffer()), soundBytes);
+});
+
+test("lost enqueue responses replay one owned job without spending another hourly admission", async () => {
+  const previous = {
+    key: process.env.GEMINI_API_KEY,
+    rate: process.env.RATE_MEDIA_ENGLISH_PER_HOUR,
+    pool: process.env.WORKER_POOL,
+  };
+  process.env.GEMINI_API_KEY = `idempotency-${crypto.randomUUID()}`;
+  process.env.RATE_MEDIA_ENGLISH_PER_HOUR = "1";
+  process.env.WORKER_POOL = `idempotency-${crypto.randomUUID()}`;
+  try {
+    const state = (await audioState(request(), reelId))!;
+    const input = {
+      reelId,
+      sourceId: state.source_id,
+      confirmed: true,
+      requestId: crypto.randomUUID(),
+    };
+    const first = await englishJob(request(alice, input));
+    assert.equal(first.status, 202, await first.clone().text());
+    const job = (await first.json()) as { id: string };
+    const replay = await englishJob(request(alice, input));
+    assert.equal(replay.status, 202, await replay.clone().text());
+    assert.equal(((await replay.json()) as { id: string }).id, job.id);
+    // A known failure is returned, never secretly restarted by a transport retry.
+    assert.equal(
+      (
+        await admin
+          .from("reelready_media_jobs")
+          .update({ status: "failed", safe_error: "Saved fixture failure" })
+          .eq("id", job.id)
+      ).error,
+      null,
+    );
+    const failed = await englishJob(request(alice, { ...input, retry: true }));
+    assert.equal(
+      ((await failed.json()) as { status: string }).status,
+      "failed",
+    );
+    assert.equal(
+      (
+        await englishJob(
+          request(alice, { ...input, requestId: crypto.randomUUID() }),
+        )
+      ).status,
+      429,
+    );
+    assert.equal((await englishJob(request(bob, input))).status, 404);
+  } finally {
+    for (const [name, value] of Object.entries({
+      GEMINI_API_KEY: previous.key,
+      RATE_MEDIA_ENGLISH_PER_HOUR: previous.rate,
+      WORKER_POOL: previous.pool,
+    })) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test("persistent speech cooldown is private, expires, and blocks before consuming queue allowance", async () => {
+  const previous = {
+    key: process.env.GEMINI_API_KEY,
+    model: process.env.GEMINI_TTS_MODEL,
+  };
+  process.env.GEMINI_API_KEY = `capacity-${crypto.randomUUID()}`;
+  process.env.GEMINI_TTS_MODEL = "test-speech-capacity";
+  const isolatedKey = process.env.GEMINI_API_KEY;
+  const key = `speech-cooldown:${await digest(JSON.stringify([process.env.GEMINI_TTS_MODEL, process.env.GEMINI_API_KEY]))}`;
+  try {
+    const until = new Date(Date.now() + 86400000).toISOString();
+    await recordSpeechCooldown({ until, daily: true });
+    assert.equal((await speechCooldown())?.daily, true);
+    assert.equal(await speechCooldown("separate-transcription-model"), null);
+    const hidden = await alice.db
+      .from("reelready_rate_limits")
+      .select("key")
+      .eq("key", key);
+    assert.ok(hidden.error || hidden.data?.length === 0);
+    assert.ok(
+      (
+        await alice.db
+          .from("reelready_rate_limits")
+          .upsert({ key, count: 0, expires_at: until })
+      ).error,
+    );
+    const state = (await audioState(request(), reelId))!;
+    const rateKey = await digest(
+      `${process.env.SESSION_SECRET || process.env.SUPABASE_SECRET_KEY}:media-english:user:${alice.id}`,
+    );
+    const before = await admin
+      .from("reelready_rate_limits")
+      .select("count")
+      .eq("key", rateKey)
+      .maybeSingle();
+    const blocked = await englishJob(
+      request(alice, {
+        reelId,
+        sourceId: state.source_id,
+        confirmed: true,
+        requestId: crypto.randomUUID(),
+      }),
+    );
+    assert.equal(blocked.status, 429);
+    assert.equal(
+      ((await blocked.json()) as { code: string }).code,
+      "SPEECH_PROVIDER_LIMIT",
+    );
+    const after = await admin
+      .from("reelready_rate_limits")
+      .select("count")
+      .eq("key", rateKey)
+      .maybeSingle();
+    assert.deepEqual(after.data, before.data);
+    // A new provider key cannot inherit the old key's quota state.
+    process.env.GEMINI_API_KEY += "-changed";
+    assert.equal(await speechCooldown(), null);
+    assert.equal(
+      (
+        await admin
+          .from("reelready_rate_limits")
+          .update({ expires_at: new Date(Date.now() - 1000).toISOString() })
+          .eq("key", key)
+      ).error,
+      null,
+    );
+    process.env.GEMINI_API_KEY = isolatedKey;
+    assert.equal(await speechCooldown(), null);
+  } finally {
+    await admin.from("reelready_rate_limits").delete().eq("key", key);
+    for (const [name, value] of Object.entries({
+      GEMINI_API_KEY: previous.key,
+      GEMINI_TTS_MODEL: previous.model,
+    })) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });

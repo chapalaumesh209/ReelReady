@@ -6,25 +6,50 @@ import { withSession } from "../../supabase/server";
 import { rateLimit } from "../rate-limit";
 import { storageAdmin } from "../../supabase";
 import { ownedReel, databaseError } from "../repository";
-import { audioState, editHash, enqueue, ownedMedia } from "./repository";
+import {
+  audioState,
+  editHash,
+  enqueue,
+  ownedMedia,
+  mediaRequestFingerprint,
+} from "./repository";
 import { editSchema, needsNarration, untouched } from "../../audio/schema";
+import { speechCooldown, speechCooldownMessage } from "./speech-capacity";
 const input = z.object({
   reelId: z.string().uuid(),
   sourceId: z.string().uuid(),
   retry: z.boolean().default(false),
   confirmed: z.boolean().default(false),
   recordingId: z.string().uuid().optional(),
+  requestId: z.string().uuid().optional(),
 });
 export function mediaAction(kind: string) {
   return withSession(async (req: Request) => {
     try {
       const data = await body(req, input);
-      await ownedReel(req, data.reelId);
-      await rateLimit(
-        req,
-        `media-${kind}`,
-        ["render", "english"].includes(kind) ? 5 : kind === "analyze" ? 10 : 10,
-      );
+      const { db, user } = await ownedReel(req, data.reelId);
+      if (data.requestId) {
+        const prior = await db
+          .from("reelready_media_jobs")
+          .select(jobSelect)
+          .eq("reel_id", data.reelId)
+          .eq("source_id", data.sourceId)
+          .eq("kind", kind)
+          .eq(
+            "fingerprint",
+            await mediaRequestFingerprint(
+              user.id,
+              data.reelId,
+              data.sourceId,
+              kind,
+              data.requestId,
+            ),
+          )
+          .maybeSingle();
+        if (prior.error) databaseError(prior.error);
+        // Replaying a lost response must not enqueue, restart or charge a second job.
+        if (prior.data) return json(prior.data, 202);
+      }
       const state = await audioState(req, data.reelId);
       if (!state || state.source_id !== data.sourceId)
         throw new GenerationError(
@@ -107,6 +132,21 @@ export function mediaAction(kind: string) {
           "Generate narration or use an uploaded recording before rendering.",
           409,
         );
+      if (["preview", "generate", "english"].includes(kind)) {
+        const cooldown = await speechCooldown();
+        if (cooldown)
+          throw new GenerationError(
+            speechCooldownMessage(cooldown),
+            429,
+            "SPEECH_PROVIDER_LIMIT",
+          );
+      }
+      // Invalid input, provider cooldowns and duplicate delivery are not new jobs.
+      await rateLimit(
+        req,
+        `media-${kind}`,
+        ["render", "english"].includes(kind) ? 5 : 10,
+      );
       const job = await enqueue(
         req,
         data.reelId,
@@ -114,6 +154,7 @@ export function mediaAction(kind: string) {
         kind,
         payload,
         data.retry,
+        data.requestId,
       );
       if (
         kind === "render" &&

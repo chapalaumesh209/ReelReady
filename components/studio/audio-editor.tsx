@@ -20,6 +20,10 @@ import {
   type MediaJob,
 } from "@/lib/audio/schema";
 import type { StoredVideo } from "@/lib/supabase";
+import {
+  browserRequest as request,
+  BrowserRequestError,
+} from "@/lib/browser-request";
 
 type LinkedAsset = {
   id: string;
@@ -33,6 +37,7 @@ type Snapshot = {
   workerReady: boolean;
   speechReady: boolean;
   transcriptionReady: boolean;
+  speechUnavailableReason?: string;
 };
 type Choice = "original" | "english" | "saved";
 function friendlyAudioError(message: string) {
@@ -44,26 +49,6 @@ function friendlyAudioError(message: string) {
 }
 const active = (job: MediaJob | null) =>
   !!job && ["queued", "running"].includes(job.status);
-async function request<T>(
-  url: string,
-  body?: unknown,
-  signal?: AbortSignal,
-): Promise<T> {
-  const response = await fetch(url, {
-    method: body ? "POST" : "GET",
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-    signal,
-  });
-  const data = (await response.json()) as T & { error?: string };
-  if (!response.ok)
-    throw new Error(
-      data.error ||
-        "This could not finish. Your original video is safe; try again.",
-    );
-  return data;
-}
-
 export function AudioEditor({
   reelId,
   token,
@@ -115,6 +100,8 @@ export function AudioEditor({
   const saveChain = useRef<Promise<unknown>>(Promise.resolve());
   const heading = useRef<HTMLHeadingElement>(null);
   const inputRevision = useRef(0);
+  const creationRequest = useRef<string | null>(null);
+  const pollingInterrupted = useRef(false);
   useEffect(() => {
     callbacks.current = { onReady, onContinue, onPending };
   }, [onReady, onContinue, onPending]);
@@ -126,54 +113,63 @@ export function AudioEditor({
     if (next === "original")
       requestAnimationFrame(() => heading.current?.focus());
   }
-  const refresh = useCallback(async () => {
-    const next = await request<Snapshot>(`/api/audio?reelId=${reelId}`);
-    if (!mounted.current) return next;
-    snapshotRef.current = next;
-    setSnapshot(next);
-    if (!dirtyRef.current) {
-      const text =
-        next.state.settings.creatorInstructions ??
-        (next.state.settings.durationMode
-          ? ""
-          : creatorNote || next.state.script);
-      const profile = next.state.settings.voiceProfile || {
-        gender: "natural" as const,
-        accent: "en-US" as const,
-      };
-      profileRef.current = profile;
-      setVoiceProfile(profile);
-      const style =
-        next.state.settings.durationMode || next.state.settings.voiceProfile
-          ? next.state.settings.style
-          : "Natural";
-      deliveryRef.current = style;
-      setDelivery(style);
-      wordsRef.current = text;
-      setWords(text);
-    }
-    if (
-      next.state.rendered_id &&
-      next.state.approved_hash &&
-      !dirtyRef.current
-    ) {
-      const asset = await request<LinkedAsset>(
-        `/api/media/assets?id=${next.state.rendered_id}`,
+  const refresh = useCallback(
+    async (signal?: AbortSignal) => {
+      const next = await request<Snapshot>(
+        `/api/audio?reelId=${reelId}`,
+        undefined,
+        signal,
       );
-      if (mounted.current) {
-        setFinal(asset);
-        callbacks.current.onReady(
-          asset.stored,
-          asset.id === next.state.source_id,
-          asset.id === next.state.source_id
-            ? "Keep original audio"
-            : "Saved audio version",
-          asset.metadata,
-        );
+      if (!mounted.current) return next;
+      snapshotRef.current = next;
+      setSnapshot(next);
+      if (!dirtyRef.current) {
+        const text =
+          next.state.settings.creatorInstructions ??
+          (next.state.settings.durationMode
+            ? ""
+            : creatorNote || next.state.script);
+        const profile = next.state.settings.voiceProfile || {
+          gender: "natural" as const,
+          accent: "en-US" as const,
+        };
+        profileRef.current = profile;
+        setVoiceProfile(profile);
+        const style =
+          next.state.settings.durationMode || next.state.settings.voiceProfile
+            ? next.state.settings.style
+            : "Natural";
+        deliveryRef.current = style;
+        setDelivery(style);
+        wordsRef.current = text;
+        setWords(text);
       }
-    }
-    return next;
-  }, [reelId, creatorNote]);
+      if (
+        next.state.rendered_id &&
+        next.state.approved_hash &&
+        !dirtyRef.current
+      ) {
+        const asset = await request<LinkedAsset>(
+          `/api/media/assets?id=${next.state.rendered_id}`,
+          undefined,
+          signal,
+        );
+        if (mounted.current) {
+          setFinal(asset);
+          callbacks.current.onReady(
+            asset.stored,
+            asset.id === next.state.source_id,
+            asset.id === next.state.source_id
+              ? "Keep original audio"
+              : "Saved audio version",
+            asset.metadata,
+          );
+        }
+      }
+      return next;
+    },
+    [reelId, creatorNote],
+  );
   useEffect(() => {
     mounted.current = true;
     const abort = new AbortController();
@@ -186,7 +182,7 @@ export function AudioEditor({
           { action: "init", reelId, token },
           abort.signal,
         );
-        const next = await refresh();
+        const next = await refresh(abort.signal);
         const { jobs } = await request<{ jobs: MediaJob[] }>(
           `/api/media/jobs?reelId=${reelId}`,
           undefined,
@@ -206,6 +202,24 @@ export function AudioEditor({
         ) {
           // Keep existing custom renders usable without exposing their old editing controls.
           choose("saved");
+        } else {
+          const failed = jobs.find(
+            (j) =>
+              j.source_id === state.source_id &&
+              j.kind === "english" &&
+              j.status === "failed",
+          );
+          if (failed) {
+            setJob(failed);
+            choose("english");
+            if (!next.speechUnavailableReason)
+              setError(
+                friendlyAudioError(
+                  failed.safe_error ||
+                    "The English version could not finish. Your original and words are safe.",
+                ),
+              );
+          }
         }
         const source = next.assets.find((a) => a.id === state.source_id);
         if (!pending && next.workerReady && !source?.metadata.decoded)
@@ -260,6 +274,10 @@ export function AudioEditor({
           abort.signal,
         );
         if (abort.signal.aborted) return;
+        if (pollingInterrupted.current) {
+          pollingInterrupted.current = false;
+          setNotice("");
+        }
         if (next.status === "failed") {
           setError(
             friendlyAudioError(
@@ -267,10 +285,11 @@ export function AudioEditor({
                 "The English version could not finish. Your original video is safe.",
             ),
           );
-          await refresh();
+          const state = await refresh(abort.signal);
+          if (state.speechUnavailableReason) setError("");
         }
         if (next.status === "completed") {
-          const state = await refresh();
+          const state = await refresh(abort.signal);
           if (abort.signal.aborted) return;
           if (next.result?.applied === false)
             setNotice(
@@ -287,8 +306,17 @@ export function AudioEditor({
         }
         if (!abort.signal.aborted) setJob(next);
       } catch (e) {
-        if (!abort.signal.aborted && mounted.current)
-          setError((e as Error).message);
+        if (!abort.signal.aborted && mounted.current) {
+          if (
+            e instanceof BrowserRequestError &&
+            [0, 408, 502, 503, 504].includes(e.status)
+          ) {
+            pollingInterrupted.current = true;
+            setNotice(
+              "Reconnecting to your voiceover… Processing can continue in the background. Your original and words are safe.",
+            );
+          } else setError((e as Error).message);
+        }
       } finally {
         checking = false;
       }
@@ -307,6 +335,10 @@ export function AudioEditor({
     if (!state)
       return Promise.reject(new Error("Wait for your recording to open."));
     const changedWords = text !== (state.settings.creatorInstructions ?? "");
+    const changedVoice =
+      JSON.stringify(profileRef.current) !==
+        JSON.stringify(state.settings.voiceProfile) ||
+      deliveryRef.current !== state.settings.style;
     const edit: Edit = {
       settings: {
         ...defaultSettings(),
@@ -327,12 +359,14 @@ export function AudioEditor({
       classification: state.classification,
       segments: changedWords
         ? []
-        : state.segments.map((segment) => ({
-            ...segment,
-            assetId: null,
-            duration: null,
-            fingerprint: "",
-          })),
+        : changedVoice
+          ? state.segments.map((segment) => ({
+              ...segment,
+              assetId: null,
+              duration: null,
+              fingerprint: "",
+            }))
+          : state.segments,
     };
     const next = saveChain.current
       .catch(() => {})
@@ -380,6 +414,7 @@ export function AudioEditor({
     }
   }, [choice, editing, busy]);
   function changeWords(text: string) {
+    creationRequest.current = null;
     wordsRef.current = text;
     inputRevision.current++;
     dirtyRef.current = true;
@@ -390,6 +425,7 @@ export function AudioEditor({
     setError("");
   }
   function changeVoice(profile: typeof voiceProfile, style: typeof delivery) {
+    creationRequest.current = null;
     profileRef.current = profile;
     deliveryRef.current = style;
     setVoiceProfile(profile);
@@ -409,22 +445,54 @@ export function AudioEditor({
     setNotice("");
     callbacks.current.onPending();
     try {
-      const state = await saveWords();
-      const next = await request<MediaJob>("/api/media/english", {
-        reelId,
-        sourceId: state.source_id,
-        confirmed: true,
-        retry,
-      });
+      // Retrying unchanged choices must not discard already-generated segments.
+      await saveChain.current.catch(() => {});
+      const current = snapshotRef.current!.state;
+      const state =
+        dirtyRef.current || current.settings.durationMode !== "fit-video"
+          ? await saveWords()
+          : current;
+      creationRequest.current ||= crypto.randomUUID();
+      const next = await request<MediaJob>(
+        "/api/media/english",
+        {
+          reelId,
+          sourceId: state.source_id,
+          confirmed: true,
+          retry,
+          requestId: creationRequest.current,
+        },
+        undefined,
+        { idempotent: true },
+      );
+      creationRequest.current = null;
       if (!mounted.current) return;
       setJob(next);
+      if (next.status === "failed") {
+        setError(
+          friendlyAudioError(
+            next.safe_error ||
+              "The English version could not finish. Your words and original are safe.",
+          ),
+        );
+        await refresh();
+      }
       if (next.status === "completed") {
         await refresh();
         setEditing(false);
         setNotice("Your video is ready. Play it before continuing.");
       }
     } catch (e) {
-      if (mounted.current) setError((e as Error).message);
+      if (e instanceof BrowserRequestError && e.status > 0 && e.status < 500)
+        creationRequest.current = null;
+      if (mounted.current) {
+        setError((e as Error).message);
+        if (
+          e instanceof BrowserRequestError &&
+          e.code === "SPEECH_PROVIDER_LIMIT"
+        )
+          await refresh().catch(() => {});
+      }
     } finally {
       operation.current = false;
       if (mounted.current) setBusy("");
@@ -580,7 +648,7 @@ export function AudioEditor({
           <button
             type="button"
             className="sound-choice"
-            disabled={unavailable}
+            disabled={!snapshot.workerReady}
             onClick={() => {
               choose("english");
               setEditing(true);
@@ -595,9 +663,9 @@ export function AudioEditor({
         </fieldset>
       )}
       {snapshot.workerReady && !snapshot.speechReady && (
-        <p className="hint">
-          English voiceover isn’t available right now. Your original audio still
-          works.
+        <p className="message warning" role="status">
+          {snapshot.speechUnavailableReason ||
+            "English voiceover isn’t available right now. Your original audio still works."}
         </p>
       )}
       {choice === "english" && !processing && (!selectedFinal || editing) && (

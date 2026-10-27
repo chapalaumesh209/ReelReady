@@ -634,7 +634,15 @@ test("optional creator details stay inside the task and survive refresh", async 
 });
 
 // These tests isolate the guided voiceover UI. Real FFmpeg and queue behavior stay in test:media.
-async function mockVoiceover(page: Page, fail = false) {
+async function mockVoiceover(
+  page: Page,
+  fail = false,
+  faults: {
+    lostCreate?: boolean;
+    lostPolls?: boolean;
+    cooldown?: boolean;
+  } = {},
+) {
   const sourceId = crypto.randomUUID(),
     renderedId = crypto.randomUUID();
   let state: AudioState = {
@@ -651,6 +659,9 @@ async function mockVoiceover(page: Page, fail = false) {
   let job: MediaJob | null = null,
     polls = 0,
     creates = 0;
+  let createId = "",
+    postDropped = false,
+    pollsDropped = 0;
   const metadata = {
     decoded: true,
     hasAudio: true,
@@ -689,7 +700,10 @@ async function mockVoiceover(page: Page, fail = false) {
           state,
           assets: [{ id: sourceId, metadata }],
           workerReady: true,
-          speechReady: true,
+          speechReady: !faults.cooldown,
+          speechUnavailableReason: faults.cooldown
+            ? "The speech provider’s daily allowance is used up. Your script and completed voice segments are saved."
+            : undefined,
           transcriptionReady: true,
         },
       });
@@ -697,6 +711,10 @@ async function mockVoiceover(page: Page, fail = false) {
   await page.route(/\/api\/media\/jobs(?:\?|$)/, async (route) => {
     if (new URL(route.request().url()).searchParams.has("reelId")) {
       await route.fulfill({ json: { jobs: job ? [job] : [] } });
+      return;
+    }
+    if (faults.lostPolls && pollsDropped++ < 2) {
+      await route.abort("failed");
       return;
     }
     if (job && ++polls > 1) {
@@ -723,6 +741,12 @@ async function mockVoiceover(page: Page, fail = false) {
     expect(state.settings.targetLanguage).toBe("English");
     expect(state.settings.durationMode).toBe("fit-video");
     expect(state.settings.voiceProfile).toBeDefined();
+    expect(body.requestId).toMatch(/^[0-9a-f-]{36}$/);
+    if (job && body.requestId === createId) {
+      await route.fulfill({ json: job });
+      return;
+    }
+    createId = body.requestId;
     creates++;
     if (fail) {
       await route.fulfill({
@@ -746,6 +770,11 @@ async function mockVoiceover(page: Page, fail = false) {
       updated_at: new Date().toISOString(),
       created_at: new Date().toISOString(),
     };
+    if (faults.lostCreate && !postDropped) {
+      postDropped = true;
+      await route.abort("failed");
+      return;
+    }
     await route.fulfill({ json: job });
   });
   await page.route(/\/api\/media\/assets\?/, async (route) => {
@@ -1198,4 +1227,79 @@ test("video workspace recovery requires a clear action and keeps the original up
     (await admin.storage.from(VIDEO_BUCKET).info(originalMedia.data!.path))
       .error,
   ).toBeNull();
+});
+
+test("voiceover recovers a lost create response and interrupted polling without a duplicate job", async ({
+  page,
+}) => {
+  await start(page);
+  await upload(page);
+  const voice = await mockVoiceover(page, false, {
+    lostCreate: true,
+    lostPolls: true,
+  });
+  await page.getByRole("button", { name: "Continue to audio & voice" }).click();
+  await page
+    .getByRole("button", { name: "English voiceover", exact: false })
+    .click();
+  await page
+    .getByRole("textbox", { name: "Voiceover words", exact: true })
+    .fill("నా కథ. Narrate only the story shown in my reel.");
+  await page.getByLabel("Voice", { exact: true }).selectOption("male");
+  await page.getByLabel("Accent", { exact: true }).selectOption("en-IN");
+  await page
+    .getByLabel("Delivery", { exact: true })
+    .selectOption("Clear and professional");
+  await page
+    .getByRole("button", { name: "Create English voiceover", exact: true })
+    .click();
+  await expect(page.getByText(/Reconnecting to your voiceover/)).toBeVisible({
+    timeout: 15000,
+  });
+  await expect(
+    page.getByRole("link", { name: "Download selected video" }),
+  ).toBeVisible({ timeout: 20000 });
+  expect(voice.creates()).toBe(1);
+  await expect(page.locator(".audio-simple [role=alert]")).toHaveCount(0);
+  await expect(page.getByText(/Reconnecting to your voiceover/)).toHaveCount(0);
+});
+
+test("a known speech cooldown explains the blocker without preventing script edits or original audio", async ({
+  page,
+}) => {
+  await start(page);
+  await upload(page);
+  const voice = await mockVoiceover(page, false, { cooldown: true });
+  await page.getByRole("button", { name: "Continue to audio & voice" }).click();
+  await expect(page.getByText(/daily allowance is used up/)).toBeVisible();
+  await page
+    .getByRole("button", { name: "English voiceover", exact: false })
+    .click();
+  const words = page.getByRole("textbox", {
+    name: "Voiceover words",
+    exact: true,
+  });
+  await words.fill("मेरे शब्द सुरक्षित रहें. Keep my narration ready.");
+  await expect(
+    page.getByRole("button", { name: "Create English voiceover", exact: true }),
+  ).toBeDisabled();
+  await expect
+    .poll(() => voice.state().settings.creatorInstructions)
+    .toContain("मेरे शब्द");
+  expect(voice.creates()).toBe(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({
+    path: "artifacts/speech-cooldown-mobile.png",
+    fullPage: true,
+  });
+  await page
+    .getByRole("button", { name: "Keep original instead", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Continue to captions", exact: true })
+    .click();
+  await expect(
+    page.getByRole("textbox", { name: "Instagram caption", exact: true }),
+  ).not.toBeEmpty();
 });
