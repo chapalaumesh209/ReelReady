@@ -1,14 +1,16 @@
 import { storageAdmin } from "../../supabase";
 import { digest } from "../../server";
 import { MediaError } from "./ffmpeg";
+import { workerPool } from "../hardening";
 
 export type SpeechCooldown = { until: string; daily: boolean };
 async function capacityKey(
   model = process.env.GEMINI_TTS_MODEL || "gemini-3.8-flash-tts",
 ) {
-  // Changing the configured provider key/model cannot inherit another quota's cooldown.
+  // The worker makes speech calls. Web credentials may differ, so availability
+  // follows their shared execution pool rather than the web server's key.
   return `speech-cooldown:${await digest(
-    JSON.stringify([model, process.env.GEMINI_API_KEY || ""]),
+    JSON.stringify([workerPool(), model]),
   )}`;
 }
 export function speechCooldownMessage(cooldown: SpeechCooldown) {

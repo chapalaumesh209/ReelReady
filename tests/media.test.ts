@@ -1266,7 +1266,7 @@ test("persistent speech cooldown is private, expires, and blocks before consumin
   process.env.GEMINI_API_KEY = `capacity-${crypto.randomUUID()}`;
   process.env.GEMINI_TTS_MODEL = "test-speech-capacity";
   const isolatedKey = process.env.GEMINI_API_KEY;
-  const key = `speech-cooldown:${await digest(JSON.stringify([process.env.GEMINI_TTS_MODEL, process.env.GEMINI_API_KEY]))}`;
+  const key = `speech-cooldown:${await digest(JSON.stringify([process.env.WORKER_POOL || "default", process.env.GEMINI_TTS_MODEL]))}`;
   try {
     const until = new Date(Date.now() + 86400000).toISOString();
     await recordSpeechCooldown({ until, daily: true });
@@ -1312,9 +1312,9 @@ test("persistent speech cooldown is private, expires, and blocks before consumin
       .eq("key", rateKey)
       .maybeSingle();
     assert.deepEqual(after.data, before.data);
-    // A new provider key cannot inherit the old key's quota state.
+    // The website must report the worker's cooldown even with a different web key.
     process.env.GEMINI_API_KEY += "-changed";
-    assert.equal(await speechCooldown(), null);
+    assert.equal((await speechCooldown())?.daily, true);
     assert.equal(
       (
         await admin
