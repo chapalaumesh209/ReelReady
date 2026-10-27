@@ -71,6 +71,9 @@ export function mediaAction(kind: string) {
       const payload: Record<string, unknown> = {
         ...editSchema.parse(state),
         stateHash: await editHash(state),
+        ...(["preview", "generate", "english"].includes(kind)
+          ? { speechModel: ttsConfiguration().model }
+          : {}),
       };
       if (["generate", "render", "english"].includes(kind) && !data.confirmed)
         throw new GenerationError(
@@ -196,7 +199,7 @@ export function mediaAction(kind: string) {
   });
 }
 export const jobSelect =
-  "id,source_id,kind,status,stage,result,safe_error,created_at,updated_at";
+  "id,source_id,kind,status,stage,result,safe_error,created_at,updated_at,speech_model:payload->>speechModel";
 export async function jobList(req: Request, reelId: string) {
   const { db } = await ownedReel(req, reelId);
   const r = await db

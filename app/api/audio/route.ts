@@ -50,6 +50,7 @@ export const GET = withSession(async (req: Request) => {
       transcriptionReady:
         !!process.env.GEMINI_API_KEY &&
         process.env.SPEECH_TO_TEXT_PROVIDER !== "disabled",
+      speechModel: ttsConfiguration().model,
       voiceDirectionsOnly: ttsConfiguration().voiceDirectionsOnly,
       settings: defaultSettings(),
     });

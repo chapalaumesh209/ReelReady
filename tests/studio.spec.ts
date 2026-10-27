@@ -642,6 +642,7 @@ async function mockVoiceover(
     lostPolls?: boolean;
     cooldown?: boolean;
     freeVoice?: boolean;
+    oldProviderFailure?: boolean;
   } = {},
 ) {
   const sourceId = crypto.randomUUID(),
@@ -657,7 +658,19 @@ async function mockVoiceover(
     approved_hash: null,
     updated_at: new Date().toISOString(),
   };
-  let job: MediaJob | null = null,
+  let job: MediaJob | null = faults.oldProviderFailure
+      ? {
+          id: crypto.randomUUID(),
+          source_id: sourceId,
+          kind: "english",
+          status: "failed",
+          stage: "Needs attention",
+          result: null,
+          safe_error: "The speech provider’s daily allowance is used up.",
+          speech_model: "gemini-3.8-flash-tts",
+          updated_at: new Date().toISOString(),
+        }
+      : null,
     polls = 0,
     creates = 0;
   let createId = "",
@@ -703,6 +716,9 @@ async function mockVoiceover(
           workerReady: true,
           speechReady: !faults.cooldown,
           voiceDirectionsOnly: !!faults.freeVoice,
+          speechModel: faults.freeVoice
+            ? "fish-audio/s2.1-pro-free:free"
+            : "gemini-3.8-flash-tts",
           speechUnavailableReason: faults.cooldown
             ? "The speech provider’s daily allowance is used up. Your script and completed voice segments are saved."
             : undefined,
@@ -1312,16 +1328,20 @@ test("free narration keeps the same simple controls and explains best-effort voi
   await page.setViewportSize({ width: 390, height: 844 });
   await start(page);
   await upload(page);
-  const voice = await mockVoiceover(page, false, { freeVoice: true });
+  const voice = await mockVoiceover(page, false, {
+    freeVoice: true,
+    oldProviderFailure: true,
+  });
   await page.getByRole("button", { name: "Continue to audio & voice" }).click();
-  await page
-    .getByRole("button", { name: "English voiceover", exact: false })
-    .click();
+
   await expect(
     page.getByText("Voice and accent are delivery directions", {
       exact: false,
     }),
   ).toBeVisible();
+  await expect(
+    page.getByText("daily allowance is used up", { exact: false }),
+  ).toHaveCount(0);
   await page.getByLabel("Voice", { exact: true }).selectOption("male");
   await page.getByLabel("Accent", { exact: true }).selectOption("en-IN");
   await page

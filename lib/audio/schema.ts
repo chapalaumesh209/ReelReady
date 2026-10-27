@@ -129,6 +129,7 @@ export type MediaJob = {
   stage: string;
   result: Record<string, unknown> | null;
   safe_error: string | null;
+  speech_model?: string | null;
   updated_at: string;
   created_at?: string;
 };

@@ -1,3 +1,4 @@
+import { mediaPersistence } from "./persistence";
 import { ttsConfiguration } from "./tts-config";
 import { enforceUpload, workerPool } from "../hardening";
 import { mkdtemp, rm, stat, writeFile, statfs } from "node:fs/promises";
@@ -48,19 +49,32 @@ export type WorkerJob = {
   lease_token: string;
 };
 function check(error: unknown) {
-  if (error)
+  if (error) {
+    const e = error as { code?: unknown; message?: unknown };
+    console.error("Media persistence failure", {
+      code:
+        typeof e.code === "string" && /^[A-Z0-9]{1,12}$/.test(e.code)
+          ? e.code
+          : "transport",
+      connectionFailure:
+        typeof e.message === "string" &&
+        /fetch failed|network|timeout|abort|socket/i.test(e.message),
+    });
     throw new MediaError(
       "The media worker could not save progress. Your source is safe; retry when storage is available.",
     );
+  }
 }
 async function assetFor(job: WorkerJob, id: string) {
-  const r = await storageAdmin()
-    .from("reelready_media")
-    .select("*")
-    .eq("id", id)
-    .eq("owner_id", job.owner_id)
-    .eq("reel_id", job.reel_id)
-    .single();
+  const r = await mediaPersistence(() =>
+    storageAdmin()
+      .from("reelready_media")
+      .select("*")
+      .eq("id", id)
+      .eq("owner_id", job.owner_id)
+      .eq("reel_id", job.reel_id)
+      .single(),
+  );
   check(r.error);
   return r.data;
 }
@@ -139,23 +153,27 @@ async function store(
   return id;
 }
 async function checkCancelled(job: WorkerJob) {
-  const r = await storageAdmin()
-    .from("reelready_media_jobs")
-    .select("status")
-    .eq("id", job.id)
-    .maybeSingle();
+  const r = await mediaPersistence(() =>
+    storageAdmin()
+      .from("reelready_media_jobs")
+      .select("status")
+      .eq("id", job.id)
+      .maybeSingle(),
+  );
   check(r.error);
   if (r.data?.status === "cancelled")
     throw new MediaError("This job was cancelled. Your original is safe.");
 }
 async function stage(job: WorkerJob, text: string) {
   await checkCancelled(job);
-  const r = await storageAdmin()
-    .from("reelready_media_jobs")
-    .update({ stage: text, updated_at: new Date().toISOString() })
-    .eq("id", job.id)
-    .eq("lease_token", job.lease_token)
-    .eq("status", "running");
+  const r = await mediaPersistence(() =>
+    storageAdmin()
+      .from("reelready_media_jobs")
+      .update({ stage: text, updated_at: new Date().toISOString() })
+      .eq("id", job.id)
+      .eq("lease_token", job.lease_token)
+      .eq("status", "running"),
+  );
   check(r.error);
 }
 async function apply(job: WorkerJob, changes: Record<string, unknown>) {
@@ -676,16 +694,18 @@ export async function processJob(
             continue;
           }
         }
-        const reused = await admin
-          .from("reelready_media")
-          .select("id,metadata")
-          .eq("owner_id", job.owner_id)
-          .eq("reel_id", job.reel_id)
-          .eq("kind", "voiceover")
-          .contains("metadata", { fingerprint })
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
+        const reused = await mediaPersistence(() =>
+          admin
+            .from("reelready_media")
+            .select("id,metadata")
+            .eq("owner_id", job.owner_id)
+            .eq("reel_id", job.reel_id)
+            .eq("kind", "voiceover")
+            .contains("metadata", { fingerprint })
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+        );
         check(reused.error);
         if (reused.data?.metadata?.duration) {
           completed.push({

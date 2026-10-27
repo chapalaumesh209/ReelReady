@@ -399,3 +399,44 @@ test("actual compressed audio normalizes to a decodable WAV for the existing wor
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("media progress recovers transient storage reads without retrying schema or permission errors", async () => {
+  const { mediaPersistence } = await import("../lib/server/media/persistence");
+  const waits: number[] = [];
+  let calls = 0;
+  const result = await mediaPersistence(
+    async () =>
+      ++calls < 3
+        ? {
+            error: { code: "", message: "TypeError: fetch failed" },
+            data: null,
+          }
+        : { error: null, data: "saved" },
+    async (ms) => {
+      waits.push(ms);
+    },
+  );
+  assert.equal(result.data, "saved");
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [350, 1000]);
+  for (const code of ["42501", "42703", "23505"]) {
+    calls = 0;
+    await mediaPersistence(
+      async () => {
+        calls++;
+        return { error: { code, message: "permanent failure" } };
+      },
+      async () => {},
+    );
+    assert.equal(calls, 1);
+  }
+  calls = 0;
+  await mediaPersistence(
+    async () => {
+      calls++;
+      return { error: { status: 503 } };
+    },
+    async () => {},
+  );
+  assert.equal(calls, 3);
+});

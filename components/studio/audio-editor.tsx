@@ -37,6 +37,7 @@ type Snapshot = {
   workerReady: boolean;
   speechReady: boolean;
   voiceDirectionsOnly?: boolean;
+  speechModel?: string;
   transcriptionReady: boolean;
   speechUnavailableReason?: string;
 };
@@ -213,7 +214,14 @@ export function AudioEditor({
           if (failed) {
             setJob(failed);
             choose("english");
-            if (!next.speechUnavailableReason)
+            // A failed attempt with the previous provider is history, not a
+            // statement about the newly configured voice service's capacity.
+            if (
+              !next.speechUnavailableReason &&
+              (!next.speechModel ||
+                failed.speech_model === next.speechModel ||
+                (!failed.speech_model && !next.voiceDirectionsOnly))
+            )
               setError(
                 friendlyAudioError(
                   failed.safe_error ||
