@@ -1,3 +1,4 @@
+import { ttsConfiguration } from "@/lib/server/media/tts-config";
 import { z } from "zod";
 import { workerStatus } from "@/lib/server/media/status";
 import { body, failure, json } from "@/lib/server";
@@ -35,21 +36,21 @@ export const GET = withSession(async (req: Request) => {
       .order("created_at", { ascending: false });
     if (media.error) databaseError(media.error);
     const worker = await workerStatus();
-    const cooldown = process.env.GEMINI_API_KEY ? await speechCooldown() : null;
+    const cooldown = ttsConfiguration().configured
+      ? await speechCooldown()
+      : null;
     return json({
       state,
       assets: media.data,
       workerReady: worker.status === "online",
-      speechReady:
-        !!process.env.GEMINI_API_KEY &&
-        process.env.TTS_PROVIDER !== "disabled" &&
-        !cooldown,
+      speechReady: ttsConfiguration().configured && !cooldown,
       speechUnavailableReason: cooldown
         ? speechCooldownMessage(cooldown)
         : undefined,
       transcriptionReady:
         !!process.env.GEMINI_API_KEY &&
         process.env.SPEECH_TO_TEXT_PROVIDER !== "disabled",
+      voiceDirectionsOnly: ttsConfiguration().voiceDirectionsOnly,
       settings: defaultSettings(),
     });
   } catch (e) {

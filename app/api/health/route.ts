@@ -1,3 +1,4 @@
+import { ttsConfiguration } from "@/lib/server/media/tts-config";
 import { sampleOutputsAllowed } from "@/lib/server/ai";
 import { json } from "@/lib/server";
 import { generationConfiguration } from "@/lib/generation";
@@ -13,7 +14,7 @@ export async function GET() {
       workerStatus(),
       providerCapacity().catch(() => false),
       publishingExecutorStatus(),
-      process.env.GEMINI_API_KEY
+      ttsConfiguration().configured
         ? speechCooldown()
             .then((x) => !x)
             .catch(() => false)
@@ -30,10 +31,7 @@ export async function GET() {
         ? "live"
         : unavailable,
     voice:
-      process.env.GEMINI_API_KEY &&
-      process.env.TTS_PROVIDER !== "disabled" &&
-      capacity &&
-      speechAvailable
+      ttsConfiguration().configured && capacity && speechAvailable
         ? "live"
         : unavailable,
     worker: worker.status,

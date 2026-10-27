@@ -1,3 +1,4 @@
+import { ttsConfiguration } from "@/lib/server/media/tts-config";
 import { withSession } from "@/lib/supabase/server";
 import { session, failure, json } from "@/lib/server";
 import { connectionStatus } from "@/lib/server/connections";
@@ -9,7 +10,7 @@ export const GET = withSession(async (req: Request) => {
     return json({
       ...(await connectionStatus(req)),
       aiConfigured: demoMode() || !!generationConfiguration().key,
-      speechConfigured: !!process.env.GEMINI_API_KEY,
+      speechConfigured: ttsConfiguration().configured,
     });
   } catch (e) {
     return failure(e);

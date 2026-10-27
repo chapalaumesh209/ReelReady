@@ -641,6 +641,7 @@ async function mockVoiceover(
     lostCreate?: boolean;
     lostPolls?: boolean;
     cooldown?: boolean;
+    freeVoice?: boolean;
   } = {},
 ) {
   const sourceId = crypto.randomUUID(),
@@ -701,6 +702,7 @@ async function mockVoiceover(
           assets: [{ id: sourceId, metadata }],
           workerReady: true,
           speechReady: !faults.cooldown,
+          voiceDirectionsOnly: !!faults.freeVoice,
           speechUnavailableReason: faults.cooldown
             ? "The speech provider’s daily allowance is used up. Your script and completed voice segments are saved."
             : undefined,
@@ -1302,4 +1304,49 @@ test("a known speech cooldown explains the blocker without preventing script edi
   await expect(
     page.getByRole("textbox", { name: "Instagram caption", exact: true }),
   ).not.toBeEmpty();
+});
+
+test("free narration keeps the same simple controls and explains best-effort voice directions", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await start(page);
+  await upload(page);
+  const voice = await mockVoiceover(page, false, { freeVoice: true });
+  await page.getByRole("button", { name: "Continue to audio & voice" }).click();
+  await page
+    .getByRole("button", { name: "English voiceover", exact: false })
+    .click();
+  await expect(
+    page.getByText("Voice and accent are delivery directions", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await page.getByLabel("Voice", { exact: true }).selectOption("male");
+  await page.getByLabel("Accent", { exact: true }).selectOption("en-IN");
+  await page
+    .getByLabel("Delivery", { exact: true })
+    .selectOption("Clear and professional");
+  await page
+    .getByRole("textbox", { name: "Voiceover words", exact: true })
+    .fill("Keep the real story. నా కథ. मेरी कहानी.");
+  await expect
+    .poll(() => voice.state().settings.voiceProfile?.accent)
+    .toBe("en-IN");
+  await page.screenshot({
+    path: "artifacts/free-voice-mobile.png",
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page
+    .getByRole("button", { name: "Create English voiceover", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Continue to captions", exact: true }),
+  ).toBeEnabled();
+  expect(voice.creates()).toBe(1);
 });

@@ -1,3 +1,4 @@
+import { ttsConfiguration } from "./tts-config";
 import { enforceUpload, workerPool } from "../hardening";
 import { mkdtemp, rm, stat, writeFile, statfs } from "node:fs/promises";
 import { createReadStream, createWriteStream } from "node:fs";
@@ -214,7 +215,7 @@ export async function voiceFingerprint(
       settings.targetLanguage,
       settings.style,
       settings.pace,
-      process.env.GEMINI_TTS_MODEL || "gemini-3.8-flash-tts",
+      ttsConfiguration().model,
       ...(settings.voiceProfile
         ? [settings.voiceProfile.gender, settings.voiceProfile.accent]
         : []),
@@ -716,7 +717,11 @@ export async function processJob(
         const assetId = await store(job, path, "voiceover", "audio/wav", {
           ...info,
           fingerprint,
-          voice: settings.settings.voice,
+          voice: ttsConfiguration().voiceDirectionsOnly
+            ? "prompt-directed"
+            : settings.settings.voice,
+          speechProvider: ttsConfiguration().provider,
+          speechModel: ttsConfiguration().model,
           language: settings.settings.targetLanguage,
         });
         completed.push({ ...s, assetId, duration: info.duration, fingerprint });

@@ -1,3 +1,4 @@
+import { ttsConfiguration } from "./tts-config";
 import { z } from "zod";
 import { providerCapacity } from "../provider-budget";
 import { body, failure, json } from "../../server";
@@ -78,10 +79,10 @@ export function mediaAction(kind: string) {
         );
       if (
         ["preview", "generate", "english"].includes(kind) &&
-        (!process.env.GEMINI_API_KEY || process.env.TTS_PROVIDER === "disabled")
+        !ttsConfiguration().configured
       )
         throw new GenerationError(
-          "Voice generation needs a configured Gemini voice service. You can keep, mute, or mix an uploaded recording instead.",
+          "Voice generation needs a configured voice service. You can keep, mute, or mix an uploaded recording instead.",
           503,
         );
       if (

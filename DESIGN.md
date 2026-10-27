@@ -73,3 +73,7 @@ The single-flow editor owns autosave through `lib/draft-autosave.ts`. Keep one r
 ## Anonymous workspace recovery
 
 A changed private browser identity cannot overwrite a reel owned by its previous identity. The save API identifies that condition explicitly instead of retrying it as a transient conflict. A text-only Plan draft recovers automatically under a new ID using only browser-cached text. Later stages offer one inline Save a recovered copy action and explain that the video must be attached again. Keep a complete browser backup and the old cloud reel unchanged. Media capabilities, publication jobs and approvals never move to the new workspace. No login, cookie reset, navigation screen or ownership-policy relaxation is introduced.
+
+## Free narration delivery guidance
+
+Source: latest user choice of zero-cost OpenRouter narration. Keep all existing controls and lavender tokens. A single conditional hint below native voice selects explains that free voice/accent choices are delivery directions and the preview is authoritative. No added setup page, provider selector or success claim before playable rendering. Existing original audio and saved scripts remain available on quota or service failure.

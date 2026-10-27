@@ -3,10 +3,10 @@ import { digest } from "../../server";
 import { MediaError } from "./ffmpeg";
 import { workerPool } from "../hardening";
 
+import { ttsConfiguration } from "./tts-config";
+
 export type SpeechCooldown = { until: string; daily: boolean };
-async function capacityKey(
-  model = process.env.GEMINI_TTS_MODEL || "gemini-3.8-flash-tts",
-) {
+async function capacityKey(model = ttsConfiguration().model) {
   // The worker makes speech calls. Web credentials may differ, so availability
   // follows their shared execution pool rather than the web server's key.
   return `speech-cooldown:${await digest(

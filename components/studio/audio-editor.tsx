@@ -36,6 +36,7 @@ type Snapshot = {
   assets: MediaAsset[];
   workerReady: boolean;
   speechReady: boolean;
+  voiceDirectionsOnly?: boolean;
   transcriptionReady: boolean;
   speechUnavailableReason?: string;
 };
@@ -758,6 +759,12 @@ export function AudioEditor({
               </select>
             </div>
           </div>
+          {snapshot.voiceDirectionsOnly && (
+            <p className="hint">
+              Voice and accent are delivery directions for this free voice.
+              Preview the result before continuing; the match may vary.
+            </p>
+          )}
           {!info?.decoded && snapshot.workerReady && (
             <p className="hint" role="status">
               Checking your recording before creating the voiceover…

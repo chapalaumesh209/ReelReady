@@ -1,3 +1,4 @@
+import { ttsConfiguration } from "../lib/server/media/tts-config";
 import nextEnv from "@next/env";
 nextEnv.loadEnvConfig(process.cwd(), true);
 const { sampleOutputsAllowed } = await import("../lib/server/ai");
@@ -28,6 +29,10 @@ const storage = storageConfiguration(),
   demo = demoMode();
 const issues: string[] = [],
   local = process.argv.includes("--local");
+if (process.env.TTS_PROVIDER === "openrouter" && !ttsConfiguration().configured)
+  issues.push(
+    "Free narration requires OPENROUTER_API_KEY and the supported zero-priced OPENROUTER_TTS_MODEL.",
+  );
 try {
   if (publishExecutor() === "n8n") publisherBridgeConfiguration();
 } catch (e) {
@@ -101,7 +106,7 @@ const [worker, capacity, publishingExecutor, speechAvailable] =
       executor: "invalid",
       status: "offline",
     })),
-    process.env.GEMINI_API_KEY
+    ttsConfiguration().configured
       ? speechCooldown()
           .then((x) => !x)
           .catch(() => false)
@@ -125,10 +130,7 @@ console.log(
             ? "sample / keep original"
             : "offline / keep original",
       voice:
-        process.env.GEMINI_API_KEY &&
-        process.env.TTS_PROVIDER !== "disabled" &&
-        capacity &&
-        speechAvailable
+        ttsConfiguration().configured && capacity && speechAvailable
           ? "live (requires worker)"
           : sampleOutputsAllowed()
             ? "sample / keep original"

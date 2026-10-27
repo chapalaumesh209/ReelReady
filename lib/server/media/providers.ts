@@ -7,6 +7,8 @@ import { inferTranscriptLanguage } from "./transcript";
 import { MediaError } from "./ffmpeg";
 import { type AudioSettings } from "../../audio/schema";
 import { requestSpeech, type SpeechRetryOptions } from "./speech-request";
+import { ttsConfiguration } from "./tts-config";
+import { freeSpeechWav } from "./openrouter-speech";
 const root = "https://generativelanguage.googleapis.com";
 function headers() {
   const key = process.env.GEMINI_API_KEY;
@@ -111,6 +113,12 @@ export async function synthesize(
   settings: AudioSettings,
   options?: SpeechRetryOptions,
 ) {
+  if (ttsConfiguration().provider === "openrouter")
+    return freeSpeechWav(script, settings, options);
+  if (!ttsConfiguration().configured)
+    throw new MediaError(
+      "Voice generation is not configured. Your script is saved.",
+    );
   const selectedVoice = settings.voiceProfile
     ? (await regionalVoice(settings.voiceProfile)).id
     : settings.voice;

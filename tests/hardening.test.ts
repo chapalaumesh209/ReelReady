@@ -1082,3 +1082,65 @@ test("real Instagram preflight inspects stored MP4 metadata without a worker and
       .eq("id", sourceId);
   }
 });
+
+test("free narration readiness does not need Gemini TTS and Vercel compatibility streams compressed audio", async () => {
+  const previous = {
+    provider: process.env.TTS_PROVIDER,
+    key: process.env.OPENROUTER_API_KEY,
+    model: process.env.OPENROUTER_TTS_MODEL,
+  };
+  const oldFetch = fetch;
+  process.env.TTS_PROVIDER = "openrouter";
+  process.env.OPENROUTER_API_KEY = "private-unit-fixture";
+  delete process.env.OPENROUTER_TTS_MODEL;
+  let calls = 0;
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).startsWith("https://openrouter.ai/"))
+      return oldFetch(url, init);
+    if (String(url).endsWith("/audio/speech")) {
+      calls++;
+      assert.equal(
+        JSON.parse(String(init?.body)).model,
+        "fish-audio/s2.1-pro-free:free",
+      );
+      return new Response(new Uint8Array(150), {
+        headers: { "content-type": "audio/mpeg" },
+      });
+    }
+    if (String(url).endsWith("/endpoints"))
+      return Response.json({
+        data: { endpoints: [{ pricing: { prompt: "0", completion: "0" } }] },
+      });
+    return Response.json({
+      data: [
+        {
+          id: "fish-audio/s2.1-pro-free:free",
+          pricing: { prompt: "0", completion: "0" },
+          architecture: { output_modalities: ["speech"] },
+        },
+      ],
+    });
+  };
+  try {
+    const status = await health();
+    assert.equal(((await status.json()) as { voice: string }).voice, "live");
+    assert.equal(calls, 0);
+    const result = await voice(
+      req({ script: "A real creator narration." }, "/api/voiceover"),
+    );
+    assert.equal(result.status, 200);
+    assert.equal(result.headers.get("content-type"), "audio/mpeg");
+    assert.equal((await result.arrayBuffer()).byteLength, 150);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = oldFetch;
+    for (const [key, value] of Object.entries({
+      TTS_PROVIDER: previous.provider,
+      OPENROUTER_API_KEY: previous.key,
+      OPENROUTER_TTS_MODEL: previous.model,
+    })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
