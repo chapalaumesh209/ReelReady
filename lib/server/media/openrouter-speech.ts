@@ -1,3 +1,4 @@
+import { ENERGETIC_STYLE } from "../../audio/voice-delivery";
 import { z } from "zod";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -90,14 +91,37 @@ export async function verifyFreeSpeech(call: typeof fetch = fetch) {
       "A free voice route could not be verified. No paid voice was used.",
     );
 }
+/** Fish accepts compact inline directions. Long prose sent as `instructions`
+ * was narrated by this endpoint rather than treated as performance metadata. */
 export function freeVoiceInstructions(settings: AudioSettings) {
   const accent = {
-    "en-IN": "Indian English",
-    "en-GB": "British English",
-    "en-US": "US English",
+    "en-IN": "Indian English accent",
+    "en-GB": "British English accent",
+    "en-US": "American English accent",
   };
-  return `${settings.voiceProfile?.gender === "natural" || !settings.voiceProfile ? "A natural narrator" : `A ${settings.voiceProfile.gender} narrator`}, ${settings.voiceProfile ? accent[settings.voiceProfile.accent] : settings.targetLanguage}. ${settings.style}. ${settings.pace === "natural" ? "Natural pace" : settings.pace === "slower" ? "Slightly slower pace" : "Slightly faster pace"}. Read the input verbatim in ${settings.targetLanguage}. No music or sound effects.`;
+  const styles: Record<AudioSettings["style"], string[]> = {
+    Natural: [],
+    Casual: ["conversational"],
+    "Friendly and conversational": ["friendly"],
+    "Clear and professional": ["professional broadcast tone"],
+    [ENERGETIC_STYLE]: ["excited", "confident"],
+    "Calm and explanatory": ["calm"],
+    "Technical tutorial": ["clear explanation"],
+    "Warm storytelling": ["warm storytelling"],
+  };
+  const tags = [
+    ...(settings.voiceProfile && settings.voiceProfile.gender !== "natural"
+      ? [`${settings.voiceProfile.gender} voice`]
+      : []),
+    ...(settings.voiceProfile ? [accent[settings.voiceProfile.accent]] : []),
+    ...styles[settings.style],
+    ...(settings.pace === "natural"
+      ? []
+      : [settings.pace === "slower" ? "speaking slowly" : "speaking briskly"]),
+  ];
+  return tags.map((tag) => `[${tag}]`).join(" ");
 }
+
 type Runtime = {
   fetch?: typeof fetch;
   budget?: () => Promise<void>;
@@ -152,8 +176,7 @@ export async function requestFreeSpeech(
         },
         body: JSON.stringify({
           model: FREE_SPEECH_MODEL,
-          input: script,
-          instructions: freeVoiceInstructions(settings),
+          input: `${freeVoiceInstructions(settings)} ${script}`.trim(),
           response_format: "mp3",
         }),
         signal: AbortSignal.timeout(120000),

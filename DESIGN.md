@@ -77,3 +77,7 @@ A changed private browser identity cannot overwrite a reel owned by its previous
 ## Free narration delivery guidance
 
 Source: latest user choice of zero-cost OpenRouter narration. Keep all existing controls and lavender tokens. A single conditional hint below native voice selects explains that free voice/accent choices are delivery directions and the preview is authoritative. No added setup page, provider selector or success claim before playable rendering. Existing original audio and saved scripts remain available on quota or service failure.
+
+## Energetic narration
+
+Source: creator request for a more active, louder, impressive voice. Add Bold & energetic to the existing Delivery native select, reusing the saved Energetic creator style value. No extra page or volume controls. Selecting it regenerates performance with emphasis and projection, and the worker masters perceived loudness with peak headroom. The original recording and previous exports stay intact.

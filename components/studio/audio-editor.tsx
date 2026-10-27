@@ -756,11 +756,15 @@ export function AudioEditor({
                 <option value="Casual">Casual</option>
                 <option value="Friendly and conversational">Friendly</option>
                 <option value="Clear and professional">Professional</option>
+                <option value="Energetic creator style">
+                  Bold & energetic
+                </option>
                 {![
                   "Natural",
                   "Casual",
                   "Friendly and conversational",
                   "Clear and professional",
+                  "Energetic creator style",
                 ].includes(delivery) && (
                   <option value={delivery}>{delivery}</option>
                 )}

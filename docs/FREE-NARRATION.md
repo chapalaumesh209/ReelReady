@@ -21,3 +21,5 @@ To use Gemini again, explicitly set `TTS_PROVIDER=gemini` on server and worker. 
 Official references: [OpenRouter TTS](https://openrouter.ai/docs/guides/overview/multimodal/tts), [free model and limits](https://openrouter.ai/fish-audio/s2.1-pro-free:free).
 
 Selection (27 October 2026): the public catalogue also lists HeyGen Voice Turbo free, but that variant is marked for retirement on 30 November 2026. Fish was selected for this integration after successful real audio verification; this is a practical choice, not a claim of a universal quality ranking.
+
+Delivery uses short Fish-native inline tags (for example `[excited] [confident]`) ahead of the unchanged script. Do not send long prose in the top-level instructions field: a live transcription check found that endpoint reading those directions aloud. Voice-cache fingerprints include the adapter version, so old incorrect clips cannot be reused. Energetic rendering normalizes perceived loudness to -14 LUFS with peak headroom; unchanged original audio bypasses this treatment.

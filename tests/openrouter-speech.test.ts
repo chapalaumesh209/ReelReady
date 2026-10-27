@@ -91,11 +91,12 @@ test("free narration pins zero-priced model and sends real audio request with de
         calls++;
         const body = JSON.parse(String(init?.body));
         assert.equal(body.model, FREE_SPEECH_MODEL);
-        assert.equal(body.input, "A real creator script.");
+        assert.ok(body.input.endsWith("A real creator script."));
+        assert.equal(body.instructions, undefined);
         assert.equal(body.response_format, "mp3");
         assert.match(
-          body.instructions,
-          /male narrator, Indian English.*professional/i,
+          body.input,
+          /\[male voice\].*\[Indian English accent\].*professional/i,
         );
         assert.equal(body.voice, undefined);
         assert.equal(body.models, undefined);
@@ -439,4 +440,29 @@ test("media progress recovers transient storage reads without retrying schema or
     async () => {},
   );
   assert.equal(calls, 3);
+});
+
+test("energetic narration asks for projection and emphasis while preserving other saved delivery styles", async () => {
+  const { ENERGETIC_STYLE, deliveryInstruction } =
+    await import("../lib/audio/voice-delivery");
+  const directions = freeVoiceInstructions({
+    ...settings,
+    style: ENERGETIC_STYLE,
+  });
+  assert.match(directions, /\[excited\]/);
+  assert.match(directions, /\[confident\]/);
+  assert.ok(directions.length < 100);
+  assert.ok(!directions.includes("Read the input"));
+  assert.match(directions, /\[male voice\].*\[Indian English accent\]/);
+  assert.ok(!directions.includes("Do not"));
+  assert.equal(
+    deliveryInstruction("Clear and professional"),
+    "Clear and professional",
+  );
+  const normal = await voiceFingerprint("Same words", settings);
+  const energetic = await voiceFingerprint("Same words", {
+    ...settings,
+    style: ENERGETIC_STYLE,
+  });
+  assert.notEqual(normal, energetic);
 });

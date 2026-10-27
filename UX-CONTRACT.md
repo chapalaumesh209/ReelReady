@@ -101,3 +101,5 @@ Provider daily limits and long Retry-After windows are saved server-side in the 
 ## Free narration
 
 Source: docs/FREE-NARRATION.md and lib/server/media/tts-config.ts. Free narration uses an exact zero-priced model with no paid fallback; Gemini remains responsible for understanding the recording. AudioEditor preserves the same native voice controls and shows a concise direction-only hint when the provider has no verified gender/accent catalogue. Readiness and persisted cooldowns follow the selected speech model across web and worker. Cached narration fingerprints include that model; previous provider audio is never mistaken for the newly chosen voice.
+
+Energetic delivery uses lib/audio/voice-delivery.ts for shared synthesis directions and narration mastering. It is selected through AudioEditor’s existing Delivery control. A style-specific synthesis version prevents reuse of older flat energetic clips. Mastering runs only on outputs with narration; unchanged originals bypass it. Verification uses a real quiet-audio render, waveform peak/loudness checks, and the existing mobile voiceover browser flow.

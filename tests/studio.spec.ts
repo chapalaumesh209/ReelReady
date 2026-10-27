@@ -1346,7 +1346,10 @@ test("free narration keeps the same simple controls and explains best-effort voi
   await page.getByLabel("Accent", { exact: true }).selectOption("en-IN");
   await page
     .getByLabel("Delivery", { exact: true })
-    .selectOption("Clear and professional");
+    .selectOption("Energetic creator style");
+  await expect
+    .poll(() => voice.state().settings.style)
+    .toBe("Energetic creator style");
   await page
     .getByRole("textbox", { name: "Voiceover words", exact: true })
     .fill("Keep the real story. నా కథ. मेरी कहानी.");

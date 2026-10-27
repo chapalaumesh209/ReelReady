@@ -1,3 +1,7 @@
+import {
+  ENERGETIC_STYLE,
+  ENERGETIC_AUDIO_FILTER,
+} from "../../audio/voice-delivery";
 import { spawn } from "node:child_process";
 import {
   type AudioSettings,
@@ -271,8 +275,12 @@ export async function renderVideo(
     audioLabel = "mixed";
   }
   if (hasOutputAudio) {
+    const mastering =
+      narration && settings.style === ENERGETIC_STYLE
+        ? ENERGETIC_AUDIO_FILTER
+        : "alimiter=limit=0.95:latency=1";
     filters.push(
-      `[${audioLabel}]alimiter=limit=0.95:latency=1${settings.fade ? `,afade=t=in:d=${Math.min(settings.fade, duration / 2)},afade=t=out:st=${Math.max(0, duration - settings.fade)}:d=${Math.min(settings.fade, duration / 2)}` : ""}[finalAudio]`,
+      `[${audioLabel}]${mastering}${settings.fade ? `,afade=t=in:d=${Math.min(settings.fade, duration / 2)},afade=t=out:st=${Math.max(0, duration - settings.fade)}:d=${Math.min(settings.fade, duration / 2)}` : ""}[finalAudio]`,
     );
   }
   const extend = duration > media.duration + 0.02;

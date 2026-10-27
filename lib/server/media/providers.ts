@@ -1,3 +1,4 @@
+import { deliveryInstruction } from "../../audio/voice-delivery";
 import { providerCapacity } from "../provider-budget";
 import { GenerationError } from "../../generation";
 import { stat } from "node:fs/promises";
@@ -135,7 +136,7 @@ export async function synthesize(
               annotations: [
                 {
                   type: "speech_metadata",
-                  style: `${settings.style}. Speak in ${settings.targetLanguage}; ${settings.pace === "natural" ? "natural pace" : settings.pace === "slower" ? "slightly slower pace" : "slightly faster pace"}. Read the text verbatim.`,
+                  style: `${deliveryInstruction(settings.style)}. Speak in ${settings.targetLanguage}; ${settings.pace === "natural" ? "natural pace" : settings.pace === "slower" ? "slightly slower pace" : "slightly faster pace"}. Read the text verbatim.`,
                 },
               ],
             },

@@ -1,3 +1,7 @@
+import {
+  ENERGETIC_STYLE,
+  ENERGETIC_VOICE_VERSION,
+} from "../../audio/voice-delivery";
 import { mediaPersistence } from "./persistence";
 import { ttsConfiguration } from "./tts-config";
 import { enforceUpload, workerPool } from "../hardening";
@@ -234,6 +238,10 @@ export async function voiceFingerprint(
       settings.style,
       settings.pace,
       ttsConfiguration().model,
+      ...(ttsConfiguration().provider === "openrouter"
+        ? ["fish-inline-directions-v1"]
+        : []),
+      ...(settings.style === ENERGETIC_STYLE ? [ENERGETIC_VOICE_VERSION] : []),
       ...(settings.voiceProfile
         ? [settings.voiceProfile.gender, settings.voiceProfile.accent]
         : []),

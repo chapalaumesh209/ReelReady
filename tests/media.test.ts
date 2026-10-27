@@ -1337,3 +1337,92 @@ test("persistent speech cooldown is private, expires, and blocks before consumin
     }
   }
 });
+
+test("energetic narration raises perceived loudness with peak headroom and preserves original-only audio", async () => {
+  const inputBytes = await readFile(sound);
+  const quiet = join(dir, "quiet-narration.wav");
+  await command(ffmpeg(), [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=350:duration=2.5",
+    "-af",
+    "volume=0.03",
+    "-ar",
+    "24000",
+    quiet,
+  ]);
+  const metadata = await probe(sound, true);
+  const segment = {
+    text: "Test tone",
+    original: "",
+    start: 0,
+    end: 3,
+    duration: 2.5,
+    assetId: null,
+    fingerprint: "",
+    file: quiet,
+  };
+  const levels: number[] = [];
+  for (const style of [
+    "Clear and professional",
+    "Energetic creator style",
+  ] as const) {
+    const output = join(
+      dir,
+      `loudness-${style === "Energetic creator style" ? "energetic" : "regular"}.mp4`,
+    );
+    const rendered = await renderVideo(
+      sound,
+      output,
+      metadata,
+      { ...defaultSettings(), mode: "voiceover", style, originalVolume: 0 },
+      [segment],
+    );
+    assert.equal(rendered.metadata.audioCodec, "aac");
+    assert.equal(rendered.metadata.sampleRate, 48000);
+    assert.ok(Math.abs(rendered.metadata.duration - metadata.duration) < 0.15);
+    levels.push(rendered.metadata.meanDb!);
+    const analysis = await command(ffmpeg(), [
+      "-hide_banner",
+      "-i",
+      output,
+      "-vn",
+      "-af",
+      "volumedetect",
+      "-f",
+      "null",
+      "-",
+    ]);
+    const peak = Number(/max_volume:\s*([-\d.]+) dB/.exec(analysis.err)?.[1]);
+    assert.ok(
+      Number.isFinite(peak) && peak < -0.5,
+      `Keep peak headroom: ${peak}`,
+    );
+  }
+  assert.ok(
+    levels[1] > levels[0] + 6,
+    `Energetic mastering should be audibly louder: ${levels}`,
+  );
+  const unchanged = [];
+  for (const style of [
+    "Clear and professional",
+    "Energetic creator style",
+  ] as const) {
+    const result = await renderVideo(
+      sound,
+      join(
+        dir,
+        `original-${style === "Energetic creator style" ? "energetic" : "regular"}.mp4`,
+      ),
+      metadata,
+      { ...defaultSettings(), mode: "keep", style },
+      [],
+    );
+    unchanged.push(result.metadata.meanDb!);
+  }
+  assert.ok(Math.abs(unchanged[1] - unchanged[0]) < 0.2);
+  assert.deepEqual(await readFile(sound), inputBytes);
+});
