@@ -328,10 +328,17 @@ export async function processJob(
           const audioPath = join(work, "source.flac");
           await extractAudio(videoPath, audioPath);
           try {
-            transcript = (await deps.transcribe(audioPath, "Auto")).text.slice(
-              0,
-              4000,
-            );
+            transcript = (
+              await deps.transcribe(audioPath, "Auto", {
+                beforeAttempt: () => checkCancelled(job),
+                onRetry: async ({ delayMs }) => {
+                  await stage(
+                    job,
+                    `Speech service busy; retrying transcription in ${Math.ceil(delayMs / 1000)}s`,
+                  );
+                },
+              })
+            ).text.slice(0, 4000);
           } catch (e) {
             if (
               !(e instanceof Error) ||
@@ -518,6 +525,18 @@ export async function processJob(
       const result = await deps.transcribe(
         audio,
         settings.settings.sourceLanguage,
+        {
+          beforeAttempt: async () => {
+            await checkCancelled(job);
+            await stage(job, "Transcribing original speech");
+          },
+          onRetry: async ({ delayMs }) => {
+            await stage(
+              job,
+              `Speech service busy; retrying transcription in ${Math.ceil(delayMs / 1000)}s`,
+            );
+          },
+        },
       );
       const applied = await apply(job, {
         transcript: result.text,
@@ -676,7 +695,21 @@ export async function processJob(
           });
           continue;
         }
-        const audio = await deps.synthesize(s.text, settings.settings);
+        const audio = await deps.synthesize(s.text, settings.settings, {
+          beforeAttempt: async () => {
+            await checkCancelled(job);
+            await stage(
+              job,
+              `Generating voice segment ${i + 1} of ${segments.length}`,
+            );
+          },
+          onRetry: async ({ delayMs }) => {
+            await stage(
+              job,
+              `Speech service busy; retrying segment ${i + 1} of ${segments.length} in ${Math.ceil(delayMs / 1000)}s`,
+            );
+          },
+        });
         const path = join(dir, `segment-${i}.wav`);
         await writeFile(path, audio, { mode: 0o600 });
         const info = await probe(path, true);

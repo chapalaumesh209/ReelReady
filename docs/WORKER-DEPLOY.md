@@ -31,3 +31,9 @@ For a Hugging Face Docker Space, use the metadata in `deploy/media-worker/README
 ## Writing and video-review request windows
 
 `AI_REQUEST_TIMEOUT_MS=45000` and `AI_MEDIA_TIMEOUT_MS=90000` are per-attempt defaults; valid overrides are 1000–120000 milliseconds. Planning, publishing kits, revisions, video upload registration and video review have a 180-second request budget and a 240-second Vercel function ceiling, allowing schema validation and one retry without the former 18-second cutoff. Explicit user cancellation is preserved. A timeout never replaces a real recording analysis or existing captions with sample output when `ALLOW_SAMPLE_OUTPUT=false`.
+
+## Speech-service throttling
+
+Speech requests distinguish temporary model rate limits from explicit daily/zero-plan quota failures. Transient 429/5xx responses retry within a three-minute window, at most four attempts, respecting Google's RetryInfo or Retry-After. Cooldowns over 65 seconds are returned for later retry rather than shortened. Every attempt still consumes the app's provider-call safety budget; no quota is increased or bypassed. Daily/zero-allowance errors stop immediately with Google AI Studio quota guidance.
+
+The media worker keeps its lease during cooldowns, reports the wait in the current job stage, and checks cancellation before a new attempt. Successfully stored narration segments are reused by fingerprint on a later retry, preserving the script, original upload and prior successful speech work. A speech cooldown does not publish or schedule any content.

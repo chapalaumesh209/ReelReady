@@ -1,4 +1,4 @@
-import { takeProviderCall, providerCapacity } from "../provider-budget";
+import { providerCapacity } from "../provider-budget";
 import { GenerationError } from "../../generation";
 import { stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
@@ -6,6 +6,7 @@ import { z } from "zod";
 import { inferTranscriptLanguage } from "./transcript";
 import { MediaError } from "./ffmpeg";
 import { type AudioSettings } from "../../audio/schema";
+import { requestSpeech, type SpeechRetryOptions } from "./speech-request";
 const root = "https://generativelanguage.googleapis.com";
 function headers() {
   const key = process.env.GEMINI_API_KEY;
@@ -15,22 +16,11 @@ function headers() {
     );
   return { "x-goog-api-key": key, "Content-Type": "application/json" };
 }
-export async function interaction(data: Record<string, unknown>) {
-  headers();
-  await takeProviderCall();
-  const r = await fetch(`${root}/v1beta/interactions`, {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify({ ...data, store: false }),
-    signal: AbortSignal.timeout(120000),
-  });
-  if (!r.ok)
-    throw new MediaError(
-      r.status === 429
-        ? "Voice generation or transcription is temporarily unavailable because the speech provider has reached its allowance. Your script is saved. Keep original audio or upload your own narration; the site owner can check the provider quota."
-        : "The configured speech model is unavailable. Check its model access and credentials. Your sources are safe.",
-    );
-  return await r.json();
+export async function interaction(
+  data: Record<string, unknown>,
+  options?: SpeechRetryOptions,
+) {
+  return requestSpeech(data, headers(), options);
 }
 const blockSchema = z
   .object({
@@ -116,32 +106,39 @@ export async function regionalVoice(
   regionalCache.set(cacheKey, { voice, expires: Date.now() + 3600000 });
   return voice;
 }
-export async function synthesize(script: string, settings: AudioSettings) {
+export async function synthesize(
+  script: string,
+  settings: AudioSettings,
+  options?: SpeechRetryOptions,
+) {
   const selectedVoice = settings.voiceProfile
     ? (await regionalVoice(settings.voiceProfile)).id
     : settings.voice;
-  const result = await interaction({
-    model: process.env.GEMINI_TTS_MODEL || "gemini-3.8-flash-tts",
-    input: [
-      {
-        type: "user_input",
-        content: [
-          {
-            type: "text",
-            text: script,
-            annotations: [
-              {
-                type: "speech_metadata",
-                style: `${settings.style}. Speak in ${settings.targetLanguage}; ${settings.pace === "natural" ? "natural pace" : settings.pace === "slower" ? "slightly slower pace" : "slightly faster pace"}. Read the text verbatim.`,
-              },
-            ],
-          },
-        ],
-      },
-    ],
-    response_format: { type: "audio" },
-    generation_config: { speech_config: [{ voice: selectedVoice }] },
-  });
+  const result = await interaction(
+    {
+      model: process.env.GEMINI_TTS_MODEL || "gemini-3.8-flash-tts",
+      input: [
+        {
+          type: "user_input",
+          content: [
+            {
+              type: "text",
+              text: script,
+              annotations: [
+                {
+                  type: "speech_metadata",
+                  style: `${settings.style}. Speak in ${settings.targetLanguage}; ${settings.pace === "natural" ? "natural pace" : settings.pace === "slower" ? "slightly slower pace" : "slightly faster pace"}. Read the text verbatim.`,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      response_format: { type: "audio" },
+      generation_config: { speech_config: [{ voice: selectedVoice }] },
+    },
+    options,
+  );
   const audio = interactionBlocks(result).findLast(
     (b) => b.type === "audio" && b.data,
   );
@@ -245,7 +242,11 @@ export async function withGoogleFile<T>(
     }).catch(() => {});
   }
 }
-export async function transcribe(path: string, sourceLanguage: string) {
+export async function transcribe(
+  path: string,
+  sourceLanguage: string,
+  options?: SpeechRetryOptions,
+) {
   if (!(await providerCapacity()))
     throw new GenerationError(
       "Demo capacity reached for today. Keep original audio or try again tomorrow.",
@@ -260,16 +261,19 @@ export async function transcribe(path: string, sourceLanguage: string) {
       Hinglish: ["hi-IN", "en-IN"],
       Auto: [],
     };
-    const raw = await interaction({
-      model: process.env.TRANSCRIPTION_MODEL || "gemini-3.5-transcribe",
-      input: [{ type: "audio", uri: file.uri, mime_type: file.mimeType }],
-      generation_config: {
-        transcription_config: {
-          language_codes: codes[sourceLanguage] || [],
-          mode: { type: "verbatim", timestamp_granularities: ["word"] },
+    const raw = await interaction(
+      {
+        model: process.env.TRANSCRIPTION_MODEL || "gemini-3.5-transcribe",
+        input: [{ type: "audio", uri: file.uri, mime_type: file.mimeType }],
+        generation_config: {
+          transcription_config: {
+            language_codes: codes[sourceLanguage] || [],
+            mode: { type: "verbatim", timestamp_granularities: ["word"] },
+          },
         },
       },
-    });
+      options,
+    );
     const blocks = interactionBlocks(raw);
     const text = blocks
       .filter((b) => b.type === "text")
