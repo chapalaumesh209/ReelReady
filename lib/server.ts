@@ -70,7 +70,10 @@ export function failure(error: unknown) {
       400,
     );
   if (error instanceof GenerationError)
-    return json({ error: error.message }, error.status);
+    return json(
+      { error: error.message, ...(error.code ? { code: error.code } : {}) },
+      error.status,
+    );
   if (
     error instanceof Error &&
     ["AbortError", "TimeoutError"].includes(error.name)

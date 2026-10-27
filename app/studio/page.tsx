@@ -1,6 +1,10 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { createDraftAutosave, sendDraft } from "@/lib/draft-autosave";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createDraftAutosave,
+  sendDraft,
+  DraftSaveError,
+} from "@/lib/draft-autosave";
 import {
   ArrowRight,
   ArrowLeft,
@@ -40,6 +44,7 @@ import type { StoredVideo } from "@/lib/supabase";
 import { cloudUpload } from "@/lib/storage-upload";
 import {
   fresh,
+  recoveredDraft,
   tomorrow,
   scheduledISO,
   sampleIdeas,
@@ -113,6 +118,7 @@ export default function Home() {
     [replanConfirm, setReplanConfirm] = useState(false),
     [planAttempted, setPlanAttempted] = useState(false),
     [saveFailed, setSaveFailed] = useState(false),
+    [workspaceChanged, setWorkspaceChanged] = useState(false),
     [saveRetry, setSaveRetry] = useState(0),
     [pickerAttempted, setPickerAttempted] = useState(false),
     [cloudAvailable, setCloudAvailable] = useState<boolean | null>(null),
@@ -125,6 +131,10 @@ export default function Home() {
   }, []);
   const localDraftPresent = useRef(false);
   const hydrationFailure = useRef("");
+  const autoRecovered = useRef(false);
+  const recoveryPending = useRef<{ id: string; hadMedia: boolean } | null>(
+    null,
+  );
   const autosaver = useRef<ReturnType<
     typeof createDraftAutosave<Draft>
   > | null>(null);
@@ -426,6 +436,21 @@ export default function Home() {
         const params = new URLSearchParams(location.search);
         if (!params.has("id") || params.has("new") || params.has("sample"))
           history.replaceState({}, "", `/?id=${saved.id}`);
+        if (recoveryPending.current?.id === saved.id) {
+          setNotice(
+            "Recovered copy saved. The original draft is unchanged." +
+              (recoveryPending.current.hadMedia
+                ? " Attach your video again to continue."
+                : ""),
+          );
+          recoveryPending.current = null;
+        }
+      },
+      onFailure: (error) => {
+        setWorkspaceChanged(
+          error instanceof DraftSaveError &&
+            error.code === "REEL_WORKSPACE_CHANGED",
+        );
       },
     });
     autosaver.current = saver;
@@ -440,6 +465,67 @@ export default function Home() {
   useEffect(() => {
     autosaver.current?.retry();
   }, [saveRetry]);
+  const recoverWorkspaceDraft = useCallback(() => {
+    try {
+      // Keep the complete old browser copy, including its text outputs. Its
+      // private references cannot grant this workspace access to old uploads.
+      localStorage.setItem(
+        `reelready.recovery.${draft.id}`,
+        JSON.stringify(draft),
+      );
+      const next = recoveredDraft(draft, crypto.randomUUID());
+      localStorage.setItem(key, JSON.stringify(next));
+      recoveryPending.current = {
+        id: next.id,
+        hadMedia: !!draft.originalAsset || !!draft.job,
+      };
+      autoRecovered.current = true;
+      localDraftPresent.current = true;
+      history.replaceState({}, "", `/?id=${next.id}`);
+      setOriginal(null);
+      setDubbed(null);
+      setError("");
+      setWorkspaceChanged(false);
+      setSaveFailed(false);
+      setCloudSave("saving");
+      setNotice(
+        "Your browser workspace changed. Saving a recovered copy of your draft…",
+      );
+      setDraft(next);
+    } catch {
+      setError(
+        "Browser storage could not keep a recovery copy. Your current edits are still open; free some browser storage and retry.",
+      );
+    }
+  }, [draft]);
+  useEffect(() => {
+    // A text-only idea can recover seamlessly. Later stages require the
+    // creator to choose recovery because private video must be reattached.
+    if (
+      workspaceChanged &&
+      !autoRecovered.current &&
+      draft.step === 0 &&
+      !draft.originalAsset &&
+      !draft.englishAsset &&
+      !draft.analysis &&
+      !draft.token &&
+      Object.keys(draft.kits).length === 0 &&
+      !draft.job
+    )
+      queueMicrotask(() => {
+        if (!autoRecovered.current) recoverWorkspaceDraft();
+      });
+  }, [
+    workspaceChanged,
+    draft.step,
+    draft.originalAsset,
+    draft.englishAsset,
+    draft.analysis,
+    draft.token,
+    draft.kits,
+    draft.job,
+    recoverWorkspaceDraft,
+  ]);
   const hasOriginal = !!original || !!draft.originalAsset;
   const preview =
     draft.variant === "english"
@@ -1165,13 +1251,18 @@ export default function Home() {
           )}
           {saveFailed && (
             <p className="message error" role="alert">
-              Cloud saving is unavailable. Your latest edits are kept in this
-              browser.
+              {workspaceChanged
+                ? "This draft belongs to your previous browser workspace. Your text is kept here. Save a recovered copy to continue; you’ll need to attach the video again."
+                : "Cloud saving is unavailable. Your latest edits are kept in this browser."}
               <button
                 className="quiet"
-                onClick={() => setSaveRetry((n) => n + 1)}
+                onClick={
+                  workspaceChanged
+                    ? recoverWorkspaceDraft
+                    : () => setSaveRetry((n) => n + 1)
+                }
               >
-                Retry saving
+                {workspaceChanged ? "Save a recovered copy" : "Retry saving"}
               </button>
             </p>
           )}

@@ -1073,3 +1073,129 @@ test("failed cloud hydration without a matching browser copy cannot overwrite a 
       .input,
   ).toBe("Preserve this cloud-only reel.");
 });
+
+test("a changed anonymous workspace automatically saves a text-only recovered copy without changing the original", async ({
+  page,
+}) => {
+  await page.goto("/?new=1");
+  const box = page.getByRole("textbox", {
+    name: "Your reel idea",
+    exact: true,
+  });
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await box.fill("Original cloud idea remains private.");
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  const original = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("reelready.flow.v2")!),
+  );
+  await page.route("**/api/draft", (route) => {
+    if (route.request().postDataJSON()?.state.id === original.id)
+      return route.fulfill({
+        status: 409,
+        json: {
+          error: "Private browser workspace changed",
+          code: "REEL_WORKSPACE_CHANGED",
+        },
+      });
+    return route.continue();
+  });
+  const latest = "Keep these browser edits — నా తాజా ఆలోచన";
+  await box.fill(latest);
+  await expect(
+    page.getByText("Recovered copy saved. The original draft is unchanged.", {
+      exact: true,
+    }),
+  ).toBeVisible({ timeout: 20000 });
+  const recovered = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("reelready.flow.v2")!),
+  );
+  expect(recovered.id).not.toBe(original.id);
+  expect(recovered.input).toBe(latest);
+  await expect(page).toHaveURL(new RegExp(recovered.id));
+  expect(
+    (await (await page.request.get(`/api/reels?id=${original.id}`)).json())
+      .state.input,
+  ).toBe(original.input);
+  expect(
+    (await (await page.request.get(`/api/reels?id=${recovered.id}`)).json())
+      .state.input,
+  ).toBe(latest);
+  expect(
+    await page.evaluate(
+      (id) =>
+        JSON.parse(localStorage.getItem(`reelready.recovery.${id}`)!).input,
+      original.id,
+    ),
+  ).toBe(latest);
+  // The suite cleanup must include both new fixtures.
+  ids.add(original.id);
+  await page.screenshot({
+    path: "artifacts/workspace-recovered-desktop.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(box).toHaveValue(latest);
+  await page.screenshot({
+    path: "artifacts/workspace-recovered-mobile.png",
+    fullPage: false,
+  });
+});
+
+test("video workspace recovery requires a clear action and keeps the original upload private and intact", async ({
+  page,
+}) => {
+  await start(page);
+  await upload(page);
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  const original = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("reelready.flow.v2")!),
+  );
+  ids.add(original.id);
+  await page.route("**/api/draft", (route) =>
+    route.request().postDataJSON()?.state.id === original.id
+      ? route.fulfill({
+          status: 409,
+          json: {
+            error: "Private browser workspace changed",
+            code: "REEL_WORKSPACE_CHANGED",
+          },
+        })
+      : route.continue(),
+  );
+  await page.reload();
+  const recover = page.getByRole("button", {
+    name: "Save a recovered copy",
+    exact: true,
+  });
+  await expect(recover).toBeVisible({ timeout: 20000 });
+  await expect(page).toHaveURL(new RegExp(original.id));
+  await expect(
+    page.getByText(/you’ll need to attach the video again/),
+  ).toBeVisible();
+  await recover.click();
+  await expect(
+    page.getByText(
+      "Recovered copy saved. The original draft is unchanged. Attach your video again to continue.",
+      { exact: true },
+    ),
+  ).toBeVisible({ timeout: 20000 });
+  const copy = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("reelready.flow.v2")!),
+  );
+  expect(copy.originalAsset).toBeNull();
+  expect(copy.englishAsset).toBeNull();
+  expect(copy.job).toBeNull();
+  expect(copy.id).not.toBe(original.id);
+  expect(copy.input).toBe(original.input);
+  const originalMedia = await admin
+    .from("reelready_media")
+    .select("path")
+    .eq("reel_id", original.id)
+    .eq("path", original.originalAsset.path)
+    .single();
+  expect(originalMedia.error).toBeNull();
+  expect(
+    (await admin.storage.from(VIDEO_BUCKET).info(originalMedia.data!.path))
+      .error,
+  ).toBeNull();
+});

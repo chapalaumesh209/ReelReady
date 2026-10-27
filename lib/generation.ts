@@ -5,6 +5,7 @@ export class GenerationError extends Error {
   constructor(
     message: string,
     public readonly status: number = 502,
+    public readonly code?: string,
   ) {
     super(message);
   }

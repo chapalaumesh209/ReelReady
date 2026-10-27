@@ -39,6 +39,11 @@ export async function ensureReel(req: Request, id: string) {
         .maybeSingle();
       if (raced.error) databaseError(raced.error);
       if (raced.data) return { db, user };
+      throw new GenerationError(
+        "This draft belongs to a different private browser workspace. Your edits are still kept in this browser.",
+        409,
+        "REEL_WORKSPACE_CHANGED",
+      );
     }
     if (created.error)
       throw new GenerationError(

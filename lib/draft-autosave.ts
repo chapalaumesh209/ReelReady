@@ -1,5 +1,8 @@
 export class DraftSaveError extends Error {
-  constructor(public status: number) {
+  constructor(
+    public status: number,
+    public code?: string,
+  ) {
     super("Draft saving did not finish.");
   }
 }
@@ -11,8 +14,13 @@ export async function sendDraft<T>(state: T, signal: AbortSignal) {
     signal,
   });
   if (!response.ok) {
-    await response.body?.cancel();
-    throw new DraftSaveError(response.status);
+    const result = (await response.json().catch(() => ({}))) as {
+      code?: unknown;
+    };
+    throw new DraftSaveError(
+      response.status,
+      typeof result.code === "string" ? result.code : undefined,
+    );
   }
   const result = (await response.json()) as { saved?: boolean };
   if (result.saved !== true) throw new DraftSaveError(502);
@@ -24,6 +32,7 @@ export function createDraftAutosave<T>(options: {
   send: (value: T, signal: AbortSignal) => Promise<void>;
   onStatus: (status: "saving" | "saved" | "local") => void;
   onSaved?: (value: T) => void;
+  onFailure?: (error: unknown) => void;
   debounceMs?: number;
   retryDelays?: number[];
   timeoutMs?: number;
@@ -65,15 +74,22 @@ export function createDraftAutosave<T>(options: {
     } catch (error) {
       if (stopped) return;
       const retryable =
-        !(error instanceof DraftSaveError) ||
-        error.status === 408 ||
-        error.status === 409 ||
-        error.status === 429 ||
-        error.status >= 500;
+        !(
+          error instanceof DraftSaveError &&
+          error.code === "REEL_WORKSPACE_CHANGED"
+        ) &&
+        (!(error instanceof DraftSaveError) ||
+          error.status === 408 ||
+          error.status === 409 ||
+          error.status === 429 ||
+          error.status >= 500);
       if (snapshotVersion !== version) nextDelay = options.debounceMs ?? 1200;
       else if (retryable && attempts < delays.length)
         nextDelay = delays[attempts++];
-      else options.onStatus("local");
+      else {
+        options.onStatus("local");
+        options.onFailure?.(error);
+      }
     } finally {
       clearTimeout(timeout);
       running = false;

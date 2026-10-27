@@ -140,3 +140,78 @@ test("the save transport requires server acknowledgement and preserves retry sta
     globalThis.fetch = original;
   }
 });
+
+test("workspace changes are permanent conflicts with a recovery code, not transient retries", async () => {
+  let calls = 0;
+  const errors: unknown[] = [];
+  const saver = createDraftAutosave({
+    send: async () => {
+      calls++;
+      throw new DraftSaveError(409, "REEL_WORKSPACE_CHANGED");
+    },
+    onStatus: () => {},
+    onFailure: (e) => errors.push(e),
+    debounceMs: 1,
+    retryDelays: [1, 1],
+  });
+  try {
+    saver.submit("browser-owned text");
+    await until(() => errors.length === 1);
+    await wait();
+    assert.equal(calls, 1);
+    assert.equal((errors[0] as DraftSaveError).code, "REEL_WORKSPACE_CHANGED");
+  } finally {
+    saver.dispose();
+  }
+  const old = globalThis.fetch;
+  try {
+    globalThis.fetch = async () =>
+      Response.json(
+        { error: "Workspace changed", code: "REEL_WORKSPACE_CHANGED" },
+        { status: 409 },
+      );
+    await assert.rejects(
+      () => sendDraft({}, new AbortController().signal),
+      (e: unknown) =>
+        e instanceof DraftSaveError && e.code === "REEL_WORKSPACE_CHANGED",
+    );
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("workspace recovery preserves local planning text without adopting private media or publish approvals", async () => {
+  const { fresh, recoveredDraft } = await import("../lib/reel");
+  const original = {
+    ...fresh(),
+    id: crypto.randomUUID(),
+    input: "నా ఆలోచన — मेरी कहानी",
+    step: 5,
+    token: "old-private-capability",
+    dubScript: "My edited narration",
+    audioReady: true,
+    originalAsset: {
+      token: "private-video",
+      path: "other-owner/private.mp4",
+      mime: "video/mp4",
+      name: "video.mp4",
+      size: 100,
+    },
+    job: { id: "private-job" },
+  };
+  const recovered = recoveredDraft(
+    original as unknown as import("../lib/reel").Draft,
+    crypto.randomUUID(),
+  );
+  assert.equal(recovered.input, original.input);
+  assert.equal(recovered.dubScript, original.dubScript);
+  assert.notEqual(recovered.id, original.id);
+  assert.equal(recovered.originalAsset, null);
+  assert.equal(recovered.englishAsset, null);
+  assert.equal(recovered.token, "");
+  assert.equal(recovered.job, null);
+  assert.equal(recovered.audioReady, false);
+  assert.equal(recovered.step, 0);
+  assert.equal(original.token, "old-private-capability");
+  assert.equal(original.originalAsset.path, "other-owner/private.mp4");
+});

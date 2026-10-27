@@ -69,3 +69,7 @@ The production flow offers no sample idea/video shortcuts and ignores sample URL
 ## Draft recovery
 
 The single-flow editor owns autosave through `lib/draft-autosave.ts`. Keep one request in flight and queue the latest snapshot. Temporary network/server conflicts retry automatically with bounded backoff; manual retry, browser focus and restored connectivity resume pending work. A matching browser draft takes priority when reopening its link. Failed hydration of a cloud-only reel must never persist or upload an empty shell. The existing save status and inline Retry saving control remain the canonical feedback; no new navigation, settings or visual tokens are introduced.
+
+## Anonymous workspace recovery
+
+A changed private browser identity cannot overwrite a reel owned by its previous identity. The save API identifies that condition explicitly instead of retrying it as a transient conflict. A text-only Plan draft recovers automatically under a new ID using only browser-cached text. Later stages offer one inline Save a recovered copy action and explain that the video must be attached again. Keep a complete browser backup and the old cloud reel unchanged. Media capabilities, publication jobs and approvals never move to the new workspace. No login, cookie reset, navigation screen or ownership-policy relaxation is introduced.

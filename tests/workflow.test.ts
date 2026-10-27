@@ -847,7 +847,18 @@ test("concurrent first saves keep the owning workspace and reject foreign IDs", 
     assert.ok(results.every((x) => x.user.id === alice.id));
     await assert.rejects(
       () => ensureReel(request(bob.token), id),
-      /could not be opened/,
+      /different private browser workspace/,
+    );
+    const { POST: saveReel } = await import("../app/api/reels/route");
+    const denied = await saveReel(
+      request(bob.token, "/api/reels", {
+        state: { id, version: 2, step: 0, input: "Browser copy" },
+      }),
+    );
+    assert.equal(denied.status, 409);
+    assert.equal(
+      ((await denied.json()) as { code: string }).code,
+      "REEL_WORKSPACE_CHANGED",
     );
     const row = await admin
       .from("reelready_reels")

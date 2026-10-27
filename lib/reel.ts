@@ -99,3 +99,23 @@ export const sampleIdeas = {
   garden:
     "A short reel about my balcony garden. Show the plants I am growing, how I check the soil, and one thing I learned. Do not invent plant names or results.",
 };
+
+/** Recover browser-owned text into a new workspace, never adopt another
+ * workspace's private media, job IDs, capabilities or publication approval. */
+export function recoveredDraft(source: Draft, id: string): Draft {
+  return {
+    ...source,
+    id,
+    step: source.plan ? Math.min(source.step, 1) : 0,
+    archivedAt: null,
+    token: "",
+    originalAsset: null,
+    englishAsset: null,
+    analysis: null,
+    meta: null,
+    job: null,
+    audioReady: false,
+    audioLabel: "",
+    variant: "original",
+  };
+}
