@@ -138,15 +138,22 @@ test("professional generation uses the configured Gemini key with a grounded age
     assert.ok(hashtagCount(kit.outputs[3].text) <= 2);
   });
 });
-test("missing natural keyword placement repairs once; overstuffed hashtag output is rejected", async () => {
+test("natural search-phrase variants remain live captions; overstuffed hashtags are rejected", async () => {
   await mock(
     async (calls) => {
-      await publishingKit(brief, AbortSignal.timeout(1000));
-      assert.equal(calls.n, 2);
+      const kit = await publishingKit(brief, AbortSignal.timeout(1000));
+      assert.equal(kit.sample, false);
+      assert.equal(calls.n, 1);
+      assert.equal(calls.reviews, 1);
+      assert.equal(
+        kit.outputs.find((o) => o.id === "youtubeTitle")?.text,
+        "A cold brew review from Hyderabad",
+      );
     },
     (n) => {
       const value = generated();
-      if (n === 1) value.outputs[1].text = "A coffee moment";
+      if (n === 1)
+        value.outputs[1].text = "A cold brew review from Hyderabad";
       return value;
     },
   );
@@ -164,6 +171,64 @@ test("missing natural keyword placement repairs once; overstuffed hashtag output
       return value;
     },
   );
+});
+test("one format repair receives the failed output and specific contract errors", async () => {
+  await mock(
+    async (calls) => {
+      const kit = await publishingKit(brief, AbortSignal.timeout(2000));
+      assert.equal(kit.sample, false);
+      assert.equal(calls.n, 2);
+      assert.equal(calls.reviews, 1);
+      const repair = JSON.parse(calls.prompts[1]);
+      const content = JSON.parse(repair.contents[0].parts[0].text);
+      assert.equal(content.input, brief.input);
+      assert.equal(content.validationFeedback.previousResult.outputs[3].id, "instagram");
+      assert.match(
+        JSON.stringify(content.validationFeedback.issues),
+        /Exactly one output per platform field/,
+      );
+      assert.match(repair.systemInstruction.parts[0].text, /VALIDATION REPAIR/);
+    },
+    (n) => {
+      const value = generated();
+      if (n === 1) value.outputs[3].id = "instagram";
+      return value;
+    },
+  );
+});
+
+test("persistent malformed live captions return a clear error without overwriting manual text", async () => {
+  const previous = process.env.ALLOW_SAMPLE_OUTPUT;
+  try {
+    await mock(
+      async (calls) => {
+        process.env.ALLOW_SAMPLE_OUTPUT = "false";
+        const current = kitInput.parse({
+          ...brief,
+          current: generated().outputs,
+        }).current!;
+        const saved = structuredClone(current);
+        await assert.rejects(
+          () => publishingKit({ ...brief, current }, AbortSignal.timeout(2000)),
+          (error: unknown) =>
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "CAPTION_FORMAT_INVALID",
+        );
+        assert.equal(calls.n, 2);
+        assert.equal(calls.reviews, 0);
+        assert.deepEqual(current, saved);
+      },
+      () => {
+        const value = generated();
+        value.outputs[3].id = "instagram";
+        return value;
+      },
+    );
+  } finally {
+    if (previous === undefined) delete process.env.ALLOW_SAMPLE_OUTPUT;
+    else process.env.ALLOW_SAMPLE_OUTPUT = previous;
+  }
 });
 test("caption revisions carry current manual facts without enforcing the new-caption keyword formula", async () => {
   const current = generated().outputs.map((o) => ({

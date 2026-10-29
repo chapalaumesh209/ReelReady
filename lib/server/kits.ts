@@ -105,10 +105,14 @@ const jsonSchema = {
     discovery: {
       type: "object",
       properties: {
-        primaryKeyword: { type: "string" },
-        supportingKeywords: { type: "array", items: { type: "string" } },
-        searchIntent: { type: "string" },
-        location: { type: "string" },
+        primaryKeyword: { type: "string", minLength: 2, maxLength: 80 },
+        supportingKeywords: {
+          type: "array",
+          maxItems: 6,
+          items: { type: "string", minLength: 2, maxLength: 80 },
+        },
+        searchIntent: { type: "string", minLength: 3, maxLength: 240 },
+        location: { type: "string", maxLength: 150 },
       },
       required: [
         "primaryKeyword",
@@ -120,6 +124,8 @@ const jsonSchema = {
     },
     outputs: {
       type: "array",
+      minItems: 4,
+      maxItems: 4,
       items: {
         type: "object",
         properties: {
@@ -127,7 +133,7 @@ const jsonSchema = {
             type: "string",
             enum: ["instagram", "youtubeTitle", "youtubeDescription", "x"],
           },
-          text: { type: "string" },
+          text: { type: "string", minLength: 1, maxLength: 6000 },
         },
         required: ["id", "text"],
         additionalProperties: false,
@@ -251,33 +257,8 @@ Return exactly four platform fields plus discovery notes: primaryKeyword (short 
               code: "custom",
               message: "Include the search phrase and content strategy.",
             });
-          if (!data.current && value.discovery) {
-            const normalized = (text: string) =>
-              text.normalize("NFKC").toLocaleLowerCase().replace(/\s+/gu, " ");
-            for (const id of [
-              "instagram",
-              "youtubeTitle",
-              "youtubeDescription",
-            ] as const) {
-              const text = value.outputs.find((o) => o.id === id)!.text;
-              if (
-                !normalized(
-                  text.slice(
-                    0,
-                    id === "youtubeDescription"
-                      ? 240
-                      : id === "instagram"
-                        ? 180
-                        : 100,
-                  ),
-                ).includes(normalized(value.discovery.primaryKeyword))
-              )
-                ctx.addIssue({
-                  code: "custom",
-                  message: `Place the primary search phrase naturally near the beginning of ${id}.`,
-                });
-            }
-          }
+          // Search phrases guide the copy; natural variants and word order
+          // are valid. Factual grounding is checked independently below.
           if (data.language === "English") return;
           const native =
             data.language === "Telugu"
@@ -395,6 +376,12 @@ export async function publishingKit(
     if (signal.aborted && signal.reason?.name !== "TimeoutError") throw e;
     if (!sampleOutputsAllowed()) {
       if (e instanceof GenerationError) throw e;
+      if (e instanceof z.ZodError)
+        throw new GenerationError(
+          "The caption service returned text that still needs a format, language or platform-limit correction. Your existing captions are unchanged; try again.",
+          502,
+          "CAPTION_FORMAT_INVALID",
+        );
       throw new GenerationError(
         "The caption service could not produce a verified result. Your existing captions are unchanged; retry generation.",
         502,
