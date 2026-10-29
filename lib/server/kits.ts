@@ -245,9 +245,14 @@ PLATFORMS: Instagram: a strong specific first line, useful detail/story or takea
 LANGUAGE: ${data.language}; SCRIPT: ${data.script}. Native Telugu/Hindi/Tamil must use its script; Roman means natural transliteration in the chosen language. Avoid stiff literal translations. Preserve creator/brand/place names, links and supplied literal disclosures. Choose search phrases naturally for this language and audience; multilingual hashtags only if relevant.
 LINKS/DISCLOSURES: Supplied link only in Instagram and YouTube description, never title or X. Include supplied CTA/disclosure faithfully; never invent sponsorship or urgency. Budget for supplied text within platform and hashtag limits. Prefer one CTA, not a pile of requests.
 REVISIONS: Current manually edited outputs are the authoritative starting point. Apply ONLY the requested changes, preserve unaffected facts, hand edits, tone and disclosures; do not overwrite them to force the general marketing formula. Refresh discovery notes to match the resulting text.
+FACTUAL REPAIRS: When previousDraft and editorialCorrections are provided, minimally edit that rejected draft to remove or correct the specific unsupported additions. The original source remains the authority; previousDraft is not evidence. Keep already grounded wording, do not regenerate a new story or introduce replacement capabilities, advice, examples or claims. Concise accurate captions are better than extra unsupported detail.
 Return exactly four platform fields plus discovery notes: primaryKeyword (short search phrase, no #), up to six related supportingKeywords, a concise searchIntent explaining the viewer's actual question, and location (explicit featured place or empty). All discovery text is descriptive guidance, never verified trend or ranking data.`,
           providerOverride: useGemini ? "gemini" : undefined,
-          content: { ...data, editorialCorrections: groundingIssues },
+          content: {
+            ...data,
+            editorialCorrections: groundingIssues,
+            ...(groundingIssues.length ? { previousDraft: checked } : {}),
+          },
           schema: jsonSchema,
           signal,
         },

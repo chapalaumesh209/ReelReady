@@ -264,6 +264,13 @@ test("independent editorial review retries unsupported advice once and fails saf
       assert.equal(calls.n, 2);
       assert.equal(calls.reviews, 2);
       assert.match(calls.prompts[1], /Unsupported price/);
+      const correction = JSON.parse(calls.prompts[1]);
+      const content = JSON.parse(correction.contents[0].parts[0].text);
+      assert.deepEqual(content.previousDraft, generated());
+      assert.deepEqual(content.editorialCorrections, [
+        "Unsupported price: remove it.",
+      ]);
+      assert.equal(content.input, brief.input);
     },
     () => generated(),
     (n) =>
@@ -282,6 +289,34 @@ test("independent editorial review retries unsupported advice once and fails saf
     () => generated(),
     () => ({ grounded: false, issues: ["Remove invented tutorial steps."] }),
   );
+});
+
+test("factual repair never bypasses verification or replaces manual captions in production", async () => {
+  const previous = process.env.ALLOW_SAMPLE_OUTPUT;
+  try {
+    await mock(
+      async (calls) => {
+        process.env.ALLOW_SAMPLE_OUTPUT = "false";
+        const current = kitInput.parse({
+          ...brief,
+          current: generated().outputs,
+        }).current!;
+        const saved = structuredClone(current);
+        await assert.rejects(
+          () => publishingKit({ ...brief, current }, AbortSignal.timeout(2000)),
+          /added details beyond your video description/,
+        );
+        assert.equal(calls.n, 2);
+        assert.equal(calls.reviews, 2);
+        assert.deepEqual(current, saved);
+      },
+      () => generated(),
+      () => ({ grounded: false, issues: ["Remove the unsupported price."] }),
+    );
+  } finally {
+    if (previous === undefined) delete process.env.ALLOW_SAMPLE_OUTPUT;
+    else process.env.ALLOW_SAMPLE_OUTPUT = previous;
+  }
 });
 
 test("rewriting a selected output preserves every unrelated manual field exactly", async () => {
